@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import type { SignalResult } from '../lib/signals';
+import { useState, useEffect, useRef } from 'react';
+import type { SignalResult, SignalStrength } from '../lib/signals';
 
 export interface TradeLog {
   id: string;
@@ -14,73 +14,123 @@ export interface TradeLog {
 }
 
 interface UseAutonomousTradingProps {
-  signal?: SignalResult;
+  signal: SignalResult;
 }
 
-export function useAutonomousTrading({ signal }: UseAutonomousTradingProps = {}) {
-  const [isEnabled, setIsEnabledLocal] = useState(false);
-  const [isPaperTrade, setIsPaperTradeLocal] = useState(true);
+const COOLDOWN_MS = 60000 * 5; // 5 minutes cooldown between trades
+
+export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
+  const [isEnabled, setIsEnabled] = useState(true);
+  const [isPaperTrade, setIsPaperTrade] = useState(false);
   const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
+  
+  const lastTradeTimeRef = useRef<number>(0);
+  const isExecutingRef = useRef<boolean>(false);
 
-  // Fetch initial settings
+  // Seed historical trade logs from MongoDB on mount
   useEffect(() => {
-    fetch('/api/bot-settings')
-      .then(res => res.json())
-      .then(data => {
-        if (data.isEnabled !== undefined) setIsEnabledLocal(data.isEnabled);
-        if (data.isPaperTrade !== undefined) setIsPaperTradeLocal(data.isPaperTrade);
-      })
-      .catch(console.error);
-  }, []);
-
-  // Update settings in backend
-  const updateSettings = async (updates: { isEnabled?: boolean; isPaperTrade?: boolean }) => {
-    try {
-      const current = { isEnabled, isPaperTrade, ...updates };
-      await fetch('/api/bot-settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(current)
-      });
-      if (updates.isEnabled !== undefined) setIsEnabledLocal(updates.isEnabled);
-      if (updates.isPaperTrade !== undefined) setIsPaperTradeLocal(updates.isPaperTrade);
-    } catch (err) {
-      console.error('Failed to update settings:', err);
-    }
-  };
-
-  const setIsEnabled = (val: boolean) => updateSettings({ isEnabled: val });
-  const setIsPaperTrade = (val: boolean) => updateSettings({ isPaperTrade: val });
-
-  // Poll trades
-  useEffect(() => {
-    const fetchTrades = async () => {
+    const seedTrades = async () => {
       try {
         const res = await fetch('/api/trades?limit=50');
         if (!res.ok) return;
         const data = await res.json();
 
-        if (data.trades) {
-          const historicalLogs: TradeLog[] = data.trades.map((t: any) => ({
-            id: t.orderId || Math.random().toString(36).substr(2, 9),
-            timestamp: new Date(t.timestamp),
-            action: t.action,
-            signalScore: t.signalScore || 0, // Score might not be saved in DB currently
-            status: t.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
-            details: t.orderId ? `Order ID: ${t.orderId}` : t.error,
-            isPaperTrade: t.isPaperTrade,
+        if (data.trades && data.trades.length > 0) {
+          const historicalLogs: TradeLog[] = data.trades.map((t: Record<string, unknown>) => ({
+            id: (t.orderId as string) || Math.random().toString(36).substr(2, 9),
+            timestamp: new Date(t.timestamp as string),
+            action: t.action as 'BUY' | 'SELL',
+            signalScore: 0,
+            status: (t.status as string) === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
+            details: t.orderId ? `Order ID: ${t.orderId}` : (typeof t.error === 'object' && t.error !== null ? JSON.stringify(t.error) : (t.error as string)) || undefined,
+            isPaperTrade: t.isPaperTrade as boolean,
           }));
           setTradeLogs(historicalLogs);
         }
       } catch (err) {
-        // ignore
+        console.error('Failed to seed historical trades:', err);
       }
     };
 
-    fetchTrades();
-    const interval = setInterval(fetchTrades, 15000); // Poll trades every 15s
-    return () => clearInterval(interval);
+    seedTrades();
   }, []);
+
+  useEffect(() => {
+    // Check if trading is enabled and signal is strong enough
+    if (!isEnabled || isExecutingRef.current) return;
+
+    const now = Date.now();
+    const timeSinceLastTrade = now - lastTradeTimeRef.current;
+    
+    // Enforce cooldown
+    if (timeSinceLastTrade < COOLDOWN_MS) return;
+
+    let action: 'BUY' | 'SELL' | null = null;
+
+    if (signal.overallSignal === 'STRONG BUY') {
+      action = 'BUY';
+    } else if (signal.overallSignal === 'STRONG SELL') {
+      action = 'SELL';
+    }
+
+    if (action) {
+      executeTrade(action, signal.score);
+    }
+  }, [signal.overallSignal, isEnabled, isPaperTrade, signal.score]);
+
+  const executeTrade = async (action: 'BUY' | 'SELL', signalScore: number) => {
+    isExecutingRef.current = true;
+    lastTradeTimeRef.current = Date.now();
+
+    const logId = Math.random().toString(36).substr(2, 9);
+    
+    const newLog: TradeLog = {
+      id: logId,
+      timestamp: new Date(),
+      action,
+      signalScore,
+      status: 'PENDING',
+      isPaperTrade,
+    };
+
+    setTradeLogs((prev) => [newLog, ...prev].slice(0, 50)); // Keep last 50
+
+    try {
+      const res = await fetch('/api/trade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          isPaperTrade,
+          size: 1 // Default safe size
+        }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setTradeLogs((prev) =>
+          prev.map((log) =>
+            log.id === logId
+              ? { ...log, status: 'SUCCESS', details: `Order ID: ${data.result?.id}` }
+              : log
+          )
+        );
+      } else {
+        throw new Error(data.error?.code || data.error || 'Unknown error');
+      }
+    } catch (err: any) {
+      setTradeLogs((prev) =>
+        prev.map((log) =>
+          log.id === logId
+            ? { ...log, status: 'FAILED', details: err.message }
+            : log
+        )
+      );
+    } finally {
+      isExecutingRef.current = false;
+    }
+  };
 
   return {
     isEnabled,
