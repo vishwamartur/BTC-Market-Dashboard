@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const db = await getDb();
-    const config = await db.collection('bot_settings').findOne({ _id: 'config' });
+    const config = await db.collection('bot_settings').findOne({ _id: 'config' as any });
     
     return NextResponse.json({
       isEnabled: config?.isEnabled ?? false,
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     
     const db = await getDb();
     await db.collection('bot_settings').updateOne(
-      { _id: 'config' },
+      { _id: 'config' as any },
       { $set: { isEnabled, isPaperTrade, updatedAt: new Date() } },
       { upsert: true }
     );
