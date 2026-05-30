@@ -19,6 +19,7 @@ import LiquidationHeatmap from './components/LiquidationHeatmap';
 import TradePerformance from './components/TradePerformance';
 import OIDivergence from './components/OIDivergence';
 import WhaleFlows from './components/WhaleFlows';
+import ClientIP from './components/ClientIP';
 
 export default function Dashboard() {
   const {
@@ -72,20 +73,23 @@ export default function Dashboard() {
             Real-time Bitcoin futures liquidations & on-chain analytics
           </p>
         </div>
-        <div className="connection-status">
-          <span
-            className={`status-dot ${wsStatus['binance-liq'] || wsStatus['bybit-liq'] || wsStatus['okx-liq'] ? 'connected' : ''}`}
-          ></span>
-          <span>
-            {wsStatus['binance-liq'] || wsStatus['bybit-liq'] || wsStatus['okx-liq'] ? 'Exchanges Connected' : 'Connecting...'}
-          </span>
-          <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
-          <span
-            className={`status-dot ${wsStatus.price ? 'connected' : ''}`}
-          ></span>
-          <span>
-            {wsStatus.price ? 'Price Feed' : 'Price...'}
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <div className="connection-status">
+            <span
+              className={`status-dot ${wsStatus['binance-liq'] || wsStatus['bybit-liq'] || wsStatus['okx-liq'] ? 'connected' : ''}`}
+            ></span>
+            <span>
+              {wsStatus['binance-liq'] || wsStatus['bybit-liq'] || wsStatus['okx-liq'] ? 'Exchanges Connected' : 'Connecting...'}
+            </span>
+            <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>|</span>
+            <span
+              className={`status-dot ${wsStatus.price ? 'connected' : ''}`}
+            ></span>
+            <span>
+              {wsStatus.price ? 'Price Feed' : 'Price...'}
+            </span>
+          </div>
+          <ClientIP />
         </div>
       </header>
 
