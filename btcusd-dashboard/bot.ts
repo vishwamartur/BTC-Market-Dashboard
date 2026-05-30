@@ -251,7 +251,7 @@ async function executeTrade(action: 'BUY' | 'SELL', score: number, isPaperTrade:
         productId: BTCUSDT_PRODUCT_ID,
       });
     } else {
-      throw new Error(result.error?.message || 'Exchange rejected order');
+      throw new Error((result.error as any)?.message || result.error?.code || 'Exchange rejected order');
     }
 
   } catch (error: any) {
