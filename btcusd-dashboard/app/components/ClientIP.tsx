@@ -11,7 +11,9 @@ export default function ClientIP() {
     fetch('/api/server-ip')
       .then(res => res.json())
       .then(data => {
-        if (data.ip) {
+        if (data.ipv4) {
+          setIp(data.ipv4);
+        } else if (data.ip) {
           setIp(data.ip);
         } else {
           setIp('IP Unavailable');
@@ -43,7 +45,7 @@ export default function ClientIP() {
       }}
       title="Click to copy Server IP for Delta Exchange"
     >
-      <span style={{ color: 'var(--text-muted)' }}>Server IPv6:</span>
+      <span style={{ color: 'var(--text-muted)' }}>Server IPv4:</span>
       <span style={{ fontFamily: 'var(--font-mono)', color: copied ? 'var(--green)' : 'var(--text-primary)' }}>
         {ip}
       </span>

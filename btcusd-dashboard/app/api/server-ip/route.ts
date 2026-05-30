@@ -1,33 +1,33 @@
 import { NextResponse } from 'next/server';
-import os from 'os';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    const interfaces = os.networkInterfaces();
-    let staticIpv6: string | null = null;
-
-    // Search network interfaces for a global IPv6 address
-    for (const name of Object.keys(interfaces)) {
-      const ifaceList = interfaces[name];
-      if (!ifaceList) continue;
-
-      for (const iface of ifaceList) {
-        // Look for IPv6, not internal (loopback), and not a link-local (fe80:) address
-        if (iface.family === 'IPv6' && !iface.internal && !iface.address.startsWith('fe80:')) {
-          staticIpv6 = iface.address;
-          break; // Grab the first globally routable static IPv6 found
-        }
+    // Delta Exchange usually sees your public IPv4 address, especially if hosted on AWS.
+    // Cloud providers use NAT, so the public IP isn't available via os.networkInterfaces().
+    
+    // Fetch Public IPv4
+    const res4 = await fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+    const data4 = await res4.json();
+    
+    let ipv6 = 'Not Available';
+    try {
+      // Fetch Public IPv6
+      const res6 = await fetch('https://api64.ipify.org?format=json', { cache: 'no-store' });
+      const data6 = await res6.json();
+      if (data6.ip !== data4.ip) {
+        ipv6 = data6.ip;
       }
-      if (staticIpv6) break;
+    } catch (e) {
+      // Ignore IPv6 failure
     }
 
-    if (!staticIpv6) {
-      return NextResponse.json({ ip: 'No Static IPv6 Found' });
-    }
-
-    return NextResponse.json({ ip: staticIpv6 });
+    return NextResponse.json({ 
+      ip: data4.ip, 
+      ipv4: data4.ip,
+      ipv6: ipv6 
+    });
   } catch (error) {
     console.error('Failed to get server IP:', error);
     return NextResponse.json({ error: 'Failed to fetch server IP' }, { status: 500 });
