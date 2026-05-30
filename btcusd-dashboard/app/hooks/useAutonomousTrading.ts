@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import type { SignalResult, SignalStrength } from '../lib/signals';
 
 export interface TradeLog {
   id: string;
@@ -12,80 +13,122 @@ export interface TradeLog {
   isPaperTrade: boolean;
 }
 
-export function useAutonomousTrading() {
-  const [isEnabled, setIsEnabledState] = useState(false);
-  const [isPaperTrade, setIsPaperTradeState] = useState(true);
+interface UseAutonomousTradingProps {
+  signal: SignalResult;
+}
+
+const COOLDOWN_MS = 60000 * 5; // 5 minutes cooldown between trades
+
+export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
+  const [isEnabled, setIsEnabled] = useState(true);
+  const [isPaperTrade, setIsPaperTrade] = useState(false);
   const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
+  
+  const lastTradeTimeRef = useRef<number>(0);
+  const isExecutingRef = useRef<boolean>(false);
 
-  // Fetch initial settings & trades
-  const fetchSettings = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bot-settings');
-      if (res.ok) {
+  // Seed historical trade logs from MongoDB on mount
+  useEffect(() => {
+    const seedTrades = async () => {
+      try {
+        const res = await fetch('/api/trades?limit=50');
+        if (!res.ok) return;
         const data = await res.json();
-        setIsEnabledState(data.isEnabled);
-        setIsPaperTradeState(data.isPaperTrade);
-      }
-    } catch (e) {
-      console.error('Failed to fetch bot settings');
-    }
-  }, []);
 
-  const fetchLogs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/trades?limit=50');
-      if (!res.ok) return;
-      const data = await res.json();
-
-      if (data.trades) {
-        const historicalLogs: TradeLog[] = data.trades.map((t: any) => ({
-          id: t.orderId || t._id || Math.random().toString(),
-          timestamp: new Date(t.timestamp),
-          action: t.action,
-          signalScore: t.signalScore || 0,
-          status: t.status,
-          details: t.orderId ? `Order ID: ${t.orderId}` : (typeof t.error === 'object' && t.error !== null ? JSON.stringify(t.error) : (t.error as string)) || undefined,
-          isPaperTrade: t.isPaperTrade,
-        }));
-        setTradeLogs(historicalLogs);
+        if (data.trades && data.trades.length > 0) {
+          const historicalLogs: TradeLog[] = data.trades.map((t: Record<string, unknown>) => ({
+            id: (t.orderId as string) || Math.random().toString(36).substr(2, 9),
+            timestamp: new Date(t.timestamp as string),
+            action: t.action as 'BUY' | 'SELL',
+            signalScore: 0,
+            status: (t.status as string) === 'SUCCESS' ? 'SUCCESS' : 'FAILED',
+            details: t.orderId ? `Order ID: ${t.orderId}` : (typeof t.error === 'object' && t.error !== null ? JSON.stringify(t.error) : (t.error as string)) || undefined,
+            isPaperTrade: t.isPaperTrade as boolean,
+          }));
+          setTradeLogs(historicalLogs);
+        }
+      } catch (err) {
+        console.error('Failed to seed historical trades:', err);
       }
-    } catch (err) {
-      console.error('Failed to fetch historical trades', err);
-    }
+    };
+
+    seedTrades();
   }, []);
 
   useEffect(() => {
-    fetchSettings();
-    fetchLogs();
+    // Check if trading is enabled and signal is strong enough
+    if (!isEnabled || isExecutingRef.current) return;
 
-    // Poll for new trades every 10 seconds since they are now executed on the backend
-    const interval = setInterval(fetchLogs, 10000);
-    return () => clearInterval(interval);
-  }, [fetchSettings, fetchLogs]);
+    const now = Date.now();
+    const timeSinceLastTrade = now - lastTradeTimeRef.current;
+    
+    // Enforce cooldown
+    if (timeSinceLastTrade < COOLDOWN_MS) return;
 
-  const setIsEnabled = async (enabled: boolean) => {
-    setIsEnabledState(enabled);
-    try {
-      await fetch('/api/bot-settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isEnabled: enabled, isPaperTrade }),
-      });
-    } catch (e) {
-      console.error('Failed to save bot settings');
+    let action: 'BUY' | 'SELL' | null = null;
+
+    if (signal.overallSignal === 'STRONG BUY') {
+      action = 'BUY';
+    } else if (signal.overallSignal === 'STRONG SELL') {
+      action = 'SELL';
     }
-  };
 
-  const setIsPaperTrade = async (paper: boolean) => {
-    setIsPaperTradeState(paper);
+    if (action) {
+      executeTrade(action, signal.score);
+    }
+  }, [signal.overallSignal, isEnabled, isPaperTrade, signal.score]);
+
+  const executeTrade = async (action: 'BUY' | 'SELL', signalScore: number) => {
+    isExecutingRef.current = true;
+    lastTradeTimeRef.current = Date.now();
+
+    const logId = Math.random().toString(36).substr(2, 9);
+    
+    const newLog: TradeLog = {
+      id: logId,
+      timestamp: new Date(),
+      action,
+      signalScore,
+      status: 'PENDING',
+      isPaperTrade,
+    };
+
+    setTradeLogs((prev) => [newLog, ...prev].slice(0, 50)); // Keep last 50
+
     try {
-      await fetch('/api/bot-settings', {
+      const res = await fetch('/api/trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ isEnabled, isPaperTrade: paper }),
+        body: JSON.stringify({
+          action,
+          isPaperTrade,
+          size: 1 // Default safe size
+        }),
       });
-    } catch (e) {
-      console.error('Failed to save bot settings');
+
+      const data = await res.json();
+
+      if (res.ok && data.success) {
+        setTradeLogs((prev) =>
+          prev.map((log) =>
+            log.id === logId
+              ? { ...log, status: 'SUCCESS', details: `Order ID: ${data.result?.id}` }
+              : log
+          )
+        );
+      } else {
+        throw new Error(data.error?.code || data.error || 'Unknown error');
+      }
+    } catch (err: any) {
+      setTradeLogs((prev) =>
+        prev.map((log) =>
+          log.id === logId
+            ? { ...log, status: 'FAILED', details: err.message }
+            : log
+        )
+      );
+    } finally {
+      isExecutingRef.current = false;
     }
   };
 

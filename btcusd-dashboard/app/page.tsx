@@ -59,7 +59,7 @@ export default function Dashboard() {
     isPaperTrade,
     setIsPaperTrade,
     tradeLogs,
-  } = useAutonomousTrading();
+  } = useAutonomousTrading({ signal });
 
   return (
     <main className="dashboard">
