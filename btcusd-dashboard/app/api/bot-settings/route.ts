@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const db = await getDb();
-    const settings = await db.collection('settings').findOne({ _id: 'botConfig' });
+    const settings = await db.collection<{ _id: string, isEnabled: boolean, isPaperTrade: boolean }>('settings').findOne({ _id: 'botConfig' });
     
     if (!settings) {
       return NextResponse.json({ isEnabled: false, isPaperTrade: true });
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     const { isEnabled, isPaperTrade } = await request.json();
     const db = await getDb();
     
-    await db.collection('settings').updateOne(
+    await db.collection<{ _id: string, isEnabled: boolean, isPaperTrade: boolean }>('settings').updateOne(
       { _id: 'botConfig' },
       { 
         $set: { 

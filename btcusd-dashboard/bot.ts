@@ -150,7 +150,7 @@ async function checkAndExecuteTrade() {
   if (isExecuting) return;
 
   // 1. Check if Bot is enabled in DB
-  const settings = await db.collection('settings').findOne({ _id: 'botConfig' });
+  const settings = await db.collection<{ _id: string, isEnabled: boolean, isPaperTrade: boolean }>('settings').findOne({ _id: 'botConfig' });
   const isEnabled = settings?.isEnabled ?? false; // Default off for safety
   const isPaperTrade = settings?.isPaperTrade ?? true;
 
@@ -278,9 +278,9 @@ async function main() {
   await initDB();
   
   // Set default settings if not exists
-  const settings = await db.collection('settings').findOne({ _id: 'botConfig' });
+  const settings = await db.collection<{ _id: string, isEnabled: boolean, isPaperTrade: boolean }>('settings').findOne({ _id: 'botConfig' });
   if (!settings) {
-    await db.collection('settings').insertOne({
+    await db.collection<{ _id: string, isEnabled: boolean, isPaperTrade: boolean }>('settings').insertOne({
       _id: 'botConfig',
       isEnabled: false,
       isPaperTrade: true
