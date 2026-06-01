@@ -39,7 +39,7 @@ export default function LiquidationChart({ data }: LiquidationChartProps) {
 
     // Find max value
     const maxVal = Math.max(
-      ...data.map((d) => Math.max(d.longUsd, d.shortUsd)),
+      ...data.map((d) => Math.max(Number(d.longUsd) || 0, Number(d.shortUsd) || 0)),
       1
     );
 
@@ -75,8 +75,10 @@ export default function LiquidationChart({ data }: LiquidationChartProps) {
       const x = padding.left + barGroupWidth * i + barGroupWidth / 2;
 
       // Long (red) bar
-      const longH = Math.max(0.1, (point.longUsd / maxVal) * chartH);
-      const longGrad = ctx.createLinearGradient(0, padding.top + chartH - longH, 0, padding.top + chartH);
+      const lUsd = Number(point.longUsd) || 0;
+      const longH = Math.max(0.1, (lUsd / maxVal) * chartH);
+      const startYLong = padding.top + chartH - longH;
+      const longGrad = ctx.createLinearGradient(0, isFinite(startYLong) ? startYLong : padding.top + chartH, 0, padding.top + chartH);
       longGrad.addColorStop(0, 'rgba(255, 59, 92, 0.9)');
       longGrad.addColorStop(1, 'rgba(255, 59, 92, 0.3)');
       ctx.fillStyle = longGrad;
@@ -91,8 +93,10 @@ export default function LiquidationChart({ data }: LiquidationChartProps) {
       ctx.fill();
 
       // Short (green) bar
-      const shortH = Math.max(0.1, (point.shortUsd / maxVal) * chartH);
-      const shortGrad = ctx.createLinearGradient(0, padding.top + chartH - shortH, 0, padding.top + chartH);
+      const sUsd = Number(point.shortUsd) || 0;
+      const shortH = Math.max(0.1, (sUsd / maxVal) * chartH);
+      const startYShort = padding.top + chartH - shortH;
+      const shortGrad = ctx.createLinearGradient(0, isFinite(startYShort) ? startYShort : padding.top + chartH, 0, padding.top + chartH);
       shortGrad.addColorStop(0, 'rgba(0, 230, 138, 0.9)');
       shortGrad.addColorStop(1, 'rgba(0, 230, 138, 0.3)');
       ctx.fillStyle = shortGrad;
