@@ -27,7 +27,7 @@ export interface ArbLog {
 
 export function usePriceArbitrage() {
   const [isEnabled, setIsEnabled] = useState(false);
-  const [isPaperTrade, setIsPaperTrade] = useState(true);
+  const [isPaperTrade, setIsPaperTrade] = useState(false);
   
   const [prices, setPrices] = useState<{
     binance: number|null; 

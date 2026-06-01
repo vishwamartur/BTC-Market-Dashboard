@@ -22,7 +22,7 @@ interface UseAutonomousTradingProps {
 export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
   // SAFETY: default to disabled — user must explicitly enable
   const [isEnabled, setIsEnabled] = useState(false);
-  const [isPaperTrade, setIsPaperTrade] = useState(true);
+  const [isPaperTrade, setIsPaperTrade] = useState(false);
   const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
   const [dailyPnl, setDailyPnl] = useState(0);
   

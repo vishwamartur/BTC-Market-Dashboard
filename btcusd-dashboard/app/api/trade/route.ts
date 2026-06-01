@@ -13,14 +13,14 @@ const BTCUSDT_PRODUCT_ID = 27;
 const LEVERAGE = 50;
 
 // Server-side safety limits
-const DEFAULT_TRADE_SIZE = 1;
-const MAX_TRADE_SIZE = 5; // Hard cap regardless of client request
+const DEFAULT_TRADE_SIZE = 15;
+const MAX_TRADE_SIZE = 50; // Hard cap regardless of client request
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    // Default to paper trade for safety — client must explicitly set isPaperTrade=false
-    const { action, size: rawSize = DEFAULT_TRADE_SIZE, isPaperTrade = true } = body;
+    // Default to LIVE trade
+    const { action, size: rawSize = DEFAULT_TRADE_SIZE, isPaperTrade = false } = body;
 
     if (!['BUY', 'SELL'].includes(action)) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 });

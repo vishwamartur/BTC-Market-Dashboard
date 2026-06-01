@@ -12,7 +12,7 @@ const LEVERAGE = 50;
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, size = 1, limitPrice, isPaperTrade = true, reason, spreadPct } = body;
+    const { action, size = 1, limitPrice, isPaperTrade = false, reason, spreadPct } = body;
 
     if (!['BUY_DELTA', 'SELL_DELTA', 'CLOSE_LONG', 'CLOSE_SHORT'].includes(action)) {
       return NextResponse.json({ error: 'Invalid arbitrage action' }, { status: 400 });

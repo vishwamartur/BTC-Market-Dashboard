@@ -13,7 +13,7 @@ export const DEFAULT_ARB_CONFIG: ArbitrageConfig = {
   stopLossPct: 0.20,
   maxHoldTimeMs: 60000, 
   maxDailyTrades: 50,
-  tradeSize: 1
+  tradeSize: 15
 };
 
 export type ArbAction = 'BUY_DELTA' | 'SELL_DELTA' | 'NONE';

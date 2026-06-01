@@ -14,7 +14,7 @@ export interface RiskConfig {
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
   maxDailyLossUsd: 100,
-  maxPositionSize: 5,
+  maxPositionSize: 20, // Increased to target ~$20-$40 margin at 50x
   minConfidence: 40,
   riskRewardRatio: 2.0,
   stopLossAtrMultiplier: 1.5,
@@ -45,10 +45,12 @@ export function calculatePositionSize(
 ): number {
   if (confidence < config.minConfidence) return 0;
 
-  // Linearly scale: minConfidence → 1 contract, 100 → maxPositionSize
+  // Base size of 1 contract. Scale up to maxPositionSize (20).
+  const minContracts = 1;
   const range = 100 - config.minConfidence;
   const normalized = (confidence - config.minConfidence) / range; // 0 to 1
-  const size = Math.max(1, Math.round(1 + normalized * (config.maxPositionSize - 1)));
+  
+  const size = Math.round(minContracts + normalized * (config.maxPositionSize - minContracts));
 
   return Math.min(size, config.maxPositionSize);
 }

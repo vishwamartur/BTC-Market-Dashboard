@@ -20,26 +20,24 @@ export default function AutoTraderControl({
     <div className="card">
       <div className="card-header" style={{ justifyContent: 'space-between', marginBottom: '16px' }}>
         <h2 className="card-title">⚙️ Auto-Trader</h2>
-        <div style={{ display: 'flex', gap: '12px' }}>
-          <button
-            onClick={() => setIsPaperTrade(!isPaperTrade)}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <div
             style={{
-              padding: '6px 14px',
-              borderRadius: '20px',
-              border: `1px solid ${isPaperTrade ? 'var(--blue)' : 'var(--red)'}`,
-              background: isPaperTrade ? 'var(--blue-dim)' : 'var(--red-dim)',
-              color: isPaperTrade ? 'var(--blue)' : 'var(--red)',
-              cursor: 'pointer',
+              padding: '6px 12px',
+              borderRadius: 'var(--radius-xs)',
+              border: '1px solid var(--red)',
+              background: 'var(--red-dim)',
+              color: 'var(--red)',
               fontSize: '11px',
-              fontWeight: 700,
-              letterSpacing: '0.5px',
-              transition: 'all 0.2s',
-              boxShadow: `0 0 10px ${isPaperTrade ? 'var(--blue-dim)' : 'var(--red-dim)'}`
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              boxShadow: '0 0 10px var(--red-dim)',
             }}
-            title={isPaperTrade ? "Running in simulation mode" : "WARNING: Live funds will be used"}
+            title="WARNING: Live funds will be used"
           >
-            {isPaperTrade ? 'PAPER TRADING' : 'LIVE TRADING'}
-          </button>
+            LIVE TRADING
+          </div>
           <button
             onClick={() => setIsEnabled(!isEnabled)}
             style={{
@@ -62,9 +60,9 @@ export default function AutoTraderControl({
       </div>
 
       <div style={{ padding: '16px 0 0 0' }}>
-        <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: '1.5' }}>
-          Bot executes trades on Delta Exchange when the v2 Signal Engine reaches <strong>STRONG BUY</strong> or <strong>STRONG SELL</strong> for 3+ consecutive evaluations. Position size scales with confidence (1–5 contracts). Daily loss limit: $100. Cooldown: 5 min.
-        </p>
+        <div style={{ marginTop: '16px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+          Bot executes trades on Delta Exchange when the v2 Signal Engine reaches <strong>STRONG BUY</strong> or <strong>STRONG SELL</strong> for 3+ consecutive evaluations. Position size scales with confidence (1–20 contracts). Daily loss limit: $100. Cooldown: 5 min.
+        </div>
 
         <div style={{
           maxHeight: '150px',

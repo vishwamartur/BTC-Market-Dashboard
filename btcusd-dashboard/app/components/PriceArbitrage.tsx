@@ -31,23 +31,19 @@ export default function PriceArbitrage() {
         </div>
         
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={() => setIsPaperTrade(!isPaperTrade)}
-            disabled={isEnabled}
+          <div
             style={{
               padding: '6px 12px',
               borderRadius: 'var(--radius-xs)',
-              border: `1px solid ${isPaperTrade ? 'var(--blue)' : 'var(--border-color)'}`,
-              background: isPaperTrade ? 'var(--blue-dim)' : 'transparent',
-              color: isPaperTrade ? 'var(--blue)' : 'var(--text-muted)',
+              border: '1px solid var(--red)',
+              background: 'var(--red-dim)',
+              color: 'var(--red)',
               fontSize: '11px',
               fontWeight: 600,
-              cursor: isEnabled ? 'not-allowed' : 'pointer',
-              opacity: isEnabled ? 0.5 : 1
             }}
           >
-            {isPaperTrade ? 'PAPER' : 'LIVE'}
-          </button>
+            LIVE
+          </div>
           <button
             onClick={() => setIsEnabled(!isEnabled)}
             style={{
