@@ -15,6 +15,7 @@ import OnChainAnalytics from './components/OnChainAnalytics';
 import WhaleTracker from './components/WhaleTracker';
 import SignalEngine from './components/SignalEngine';
 import AutoTraderControl from './components/AutoTraderControl';
+import PriceArbitrage from './components/PriceArbitrage';
 import LiquidationHeatmap from './components/LiquidationHeatmap';
 import TradePerformance from './components/TradePerformance';
 import OIDivergence from './components/OIDivergence';
@@ -109,7 +110,8 @@ export default function Dashboard() {
 
       {/* Signal & On-Chain Row */}
       <div className="dashboard-grid" style={{ marginTop: '20px', gridTemplateColumns: '1fr 2fr' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          <PriceArbitrage />
           <SignalEngine signal={signal} />
           <AutoTraderControl 
             isEnabled={isEnabled}
