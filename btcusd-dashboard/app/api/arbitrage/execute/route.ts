@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { placeDeltaOrder } from '../../../lib/delta';
+import { placeDeltaOrder, setDeltaLeverage } from '../../../lib/delta';
 import { insertOneAsync } from '../../../lib/db';
 
 export const runtime = 'nodejs';
@@ -7,6 +7,7 @@ export const runtime = 'nodejs';
 const DELTA_API_KEY = process.env.DELTA_API_KEY || '';
 const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 const BTCUSDT_PRODUCT_ID = 27;
+const LEVERAGE = 50;
 
 export async function POST(request: Request) {
   try {
@@ -59,7 +60,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Limit price required for arbitrage execution' }, { status: 400 });
     }
 
+    console.log(`[ARB REAL] Preparing order to Delta: ${side.toUpperCase()} ${size} contracts`);
+
+    // 1. Set Leverage
+    const levResult = await setDeltaLeverage(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID, LEVERAGE);
+    if (!levResult.success && levResult.error?.code !== 'leverage_not_changed') {
+      console.log('[ARB REAL] Failed to set leverage:', levResult.error);
+    }
+
     console.log(`[ARB REAL] Sending LIMIT order: ${side.toUpperCase()} ${size} @ ${limitPrice}`);
+
     
     const result = await placeDeltaOrder(
       DELTA_API_KEY,

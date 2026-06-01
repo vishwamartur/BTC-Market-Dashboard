@@ -10,7 +10,7 @@ const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 
 // Product ID 27 is BTCUSD linear perp on Delta Exchange India
 const BTCUSDT_PRODUCT_ID = 27;
-const LEVERAGE = 20;
+const LEVERAGE = 50;
 
 // Server-side safety limits
 const DEFAULT_TRADE_SIZE = 1;
