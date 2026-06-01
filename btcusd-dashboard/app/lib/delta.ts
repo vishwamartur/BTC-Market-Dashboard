@@ -137,3 +137,33 @@ export async function setDeltaLeverage(
     return { success: false, error: error.message };
   }
 }
+
+export async function getDeltaFills(apiKey: string, apiSecret: string, productId?: number, limit: number = 100) {
+  const method = 'GET';
+  let path = `/v2/fills?limit=${limit}`;
+  if (productId) {
+    path += `&product_id=${productId}`;
+  }
+  const payload = '';
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+
+  try {
+    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
+      method: method,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'api-key': apiKey,
+        'timestamp': timestamp,
+        'signature': signature,
+      },
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error: any) {
+    console.error('Delta Exchange API Error (Fills):', error);
+    return { success: false, error: error.message };
+  }
+}

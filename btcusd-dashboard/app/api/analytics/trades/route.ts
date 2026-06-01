@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '../../../lib/db';
+import { getDeltaFills } from '../../../lib/delta';
+
+const DELTA_API_KEY = process.env.DELTA_API_KEY || 'Wv0pZFoNN5PbQiwJp7cgvkJ9Fs2LUV';
+const DELTA_API_SECRET = process.env.DELTA_API_SECRET || 'FSsVzjpf2OY4JDJyFsqplKONwvRLMxuytZvMOmFQGHfu6NvFvO4k3KpUHxUI';
+const BTCUSDT_PRODUCT_ID = 27;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,12 +25,26 @@ export async function GET(request: Request) {
       .toArray();
 
     // Calculate cumulative P&L
-    // For paper trades, we'll simulate P&L based on trade direction and a simple model
-    // Since we don't have exit prices, we track position count and direction
     let cumulativePnl = 0;
     let winCount = 0;
     let lossCount = 0;
     let totalTrades = 0;
+
+    // Fetch real fills from Delta Exchange to get actual realized P&L
+    const fillsData = await getDeltaFills(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID, limit);
+    if (fillsData && !fillsData.success) {
+      console.warn('Could not fetch Delta fills:', fillsData.error);
+    }
+
+    const deltaFills = fillsData?.success && Array.isArray(fillsData.result) ? fillsData.result : [];
+    
+    // Map order_id to sum of realized_pnl
+    const orderPnlMap = new Map<number, number>();
+    for (const fill of deltaFills) {
+      const oid = Number(fill.order_id);
+      const pnl = Number(fill.realized_pnl || 0);
+      orderPnlMap.set(oid, (orderPnlMap.get(oid) || 0) + pnl);
+    }
 
     const pnlSeries: {
       timestamp: string;
@@ -52,19 +71,26 @@ export async function GET(request: Request) {
       const ts = new Date(trade.timestamp);
       const dateKey = ts.toISOString().split('T')[0];
 
-      // Simple P&L simulation for paper trades
-      // Each successful trade gets a small simulated gain/loss
       if (trade.status === 'SUCCESS') {
-        // Simulate a random P&L between -50 and +80 for each trade
-        // Slightly positive expected value since signals should have edge
-        const seed = trade.orderId || totalTrades;
-        const pseudoRandom = Math.sin(typeof seed === 'number' ? seed : parseInt(String(seed), 10) || totalTrades) * 43758.5453;
-        const normalized = pseudoRandom - Math.floor(pseudoRandom); // 0-1
-        const tradePnl = (normalized * 130) - 50; // -50 to +80
+        let tradePnl = 0;
+
+        if (trade.isPaperTrade) {
+          // Simulate a random P&L between -50 and +80 for paper trades
+          const seed = trade.orderId || totalTrades;
+          const pseudoRandom = Math.sin(typeof seed === 'number' ? seed : parseInt(String(seed), 10) || totalTrades) * 43758.5453;
+          const normalized = pseudoRandom - Math.floor(pseudoRandom); // 0-1
+          tradePnl = (normalized * 130) - 50; 
+        } else {
+          // Use actual realized PnL from Delta Exchange fills
+          if (trade.orderId && orderPnlMap.has(Number(trade.orderId))) {
+            tradePnl = orderPnlMap.get(Number(trade.orderId))!;
+          }
+        }
+
         cumulativePnl += tradePnl;
 
         if (tradePnl > 0) winCount++;
-        else lossCount++;
+        else if (tradePnl < 0) lossCount++;
       }
 
       pnlSeries.push({
