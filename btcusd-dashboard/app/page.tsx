@@ -34,6 +34,9 @@ export default function Dashboard() {
     prevPrice,
     wsStatus,
     lastUpdate,
+    fundingRate,
+    priceHistory,
+    oiHistory,
   } = useLiquidationData();
 
   const {
@@ -51,6 +54,9 @@ export default function Dashboard() {
     fastestFee: mempoolFees?.fastestFee ?? null,
     whaleTransactions,
     hashrateData,
+    fundingRate,
+    recentPrices: priceHistory,
+    oiHistory,
   });
 
   const {

@@ -20,7 +20,7 @@ export default function SignalEngine({ signal }: SignalEngineProps) {
     <div className="card">
       <div className="card-header">
         <h2 className="card-title">🤖 Trading Signal Engine</h2>
-        <span className="card-badge" style={{ background: 'var(--purple)', color: '#fff', boxShadow: '0 0 10px var(--purple)' }}>Algorithm</span>
+        <span className="card-badge" style={{ background: 'var(--purple)', color: '#fff', boxShadow: '0 0 10px var(--purple)' }}>v2 Algorithm</span>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '20px 0' }}>
@@ -34,6 +34,9 @@ export default function SignalEngine({ signal }: SignalEngineProps) {
         </div>
         <div style={{ fontSize: '14px', color: 'var(--text-muted)', marginTop: '8px' }}>
           Confidence: <strong style={{ color: 'var(--text-primary)' }}>{signal.confidence}%</strong>
+          <span style={{ marginLeft: '16px', color: 'var(--text-muted)' }}>
+            Score: <strong style={{ color: getSignalColor(signal.overallSignal) }}>{signal.score > 0 ? '+' : ''}{signal.score.toFixed(3)}</strong>
+          </span>
         </div>
         
         {/* Gauge Visual */}
@@ -87,22 +90,34 @@ export default function SignalEngine({ signal }: SignalEngineProps) {
         </div>
       </div>
 
-      {/* Component Breakdown */}
+      {/* Dynamic Component Breakdown — renders ALL active signal components */}
       <div style={{ marginTop: '24px' }}>
         <h3 style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px', letterSpacing: '1.5px', textTransform: 'uppercase' }}>
-          Signal Drivers
+          Signal Drivers ({signal.components.length} active)
         </h3>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <SignalRow label="Liquidation Pressure" value={signal.components.find(c => c.name === 'Liquidation Pressure')?.score || 0} />
-          <SignalRow label="Long/Short Bias" value={signal.components.find(c => c.name === 'Long/Short Bias')?.score || 0} />
-          <SignalRow label="On-Chain Activity" value={signal.components.find(c => c.name === 'On-Chain Activity')?.score || 0} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {signal.components.length === 0 ? (
+            <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', padding: '16px 0' }}>
+              Waiting for data to generate signals...
+            </div>
+          ) : (
+            signal.components.map((comp) => (
+              <SignalRow
+                key={comp.name}
+                label={comp.name}
+                value={comp.score}
+                weight={comp.weight}
+                reason={comp.reason}
+              />
+            ))
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function SignalRow({ label, value }: { label: string; value: number }) {
+function SignalRow({ label, value, weight, reason }: { label: string; value: number; weight: number; reason: string }) {
   const isPositive = value > 0;
   const isNegative = value < 0;
   
@@ -115,18 +130,37 @@ function SignalRow({ label, value }: { label: string; value: number }) {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'center',
-      padding: '12px 16px',
+      padding: '10px 14px',
       background: 'rgba(0,0,0,0.2)',
       borderRadius: 'var(--radius-xs)',
       border: '1px solid rgba(255,255,255,0.05)'
     }}>
-      <span style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 500 }}>{label}</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-primary)', fontWeight: 500 }}>{label}</span>
+          <span style={{
+            fontSize: '9px',
+            color: 'var(--text-muted)',
+            background: 'rgba(255,255,255,0.05)',
+            padding: '1px 6px',
+            borderRadius: '8px',
+            fontFamily: 'var(--font-mono)'
+          }}>
+            w:{(weight * 100).toFixed(0)}%
+          </span>
+        </div>
+        <span style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {reason}
+        </span>
+      </div>
       <span style={{
         fontFamily: 'var(--font-mono)',
         fontSize: '15px',
         fontWeight: 700,
         color,
-        textShadow: `0 0 10px ${color}80`
+        textShadow: `0 0 10px ${color}80`,
+        marginLeft: '12px',
+        flexShrink: 0,
       }}>
         {value > 0 ? '+' : ''}{value.toFixed(2)}
       </span>

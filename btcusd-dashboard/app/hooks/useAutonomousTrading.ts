@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import type { SignalResult, SignalStrength } from '../lib/signals';
+import { shouldTrade, canTrade, DEFAULT_RISK_CONFIG, type RiskConfig } from '../lib/riskManager';
 
 export interface TradeLog {
   id: string;
@@ -11,21 +12,26 @@ export interface TradeLog {
   status: 'PENDING' | 'SUCCESS' | 'FAILED';
   details?: string;
   isPaperTrade: boolean;
+  size?: number;
 }
 
 interface UseAutonomousTradingProps {
   signal: SignalResult;
 }
 
-const COOLDOWN_MS = 60000 * 5; // 5 minutes cooldown between trades
-
 export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
-  const [isEnabled, setIsEnabled] = useState(true);
-  const [isPaperTrade, setIsPaperTrade] = useState(false);
+  // SAFETY: default to disabled — user must explicitly enable
+  const [isEnabled, setIsEnabled] = useState(false);
+  const [isPaperTrade, setIsPaperTrade] = useState(true);
   const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
+  const [dailyPnl, setDailyPnl] = useState(0);
   
   const lastTradeTimeRef = useRef<number>(0);
   const isExecutingRef = useRef<boolean>(false);
+  const lastSignalRef = useRef<SignalStrength>('NEUTRAL');
+  const consecutiveSignalCountRef = useRef<number>(0);
+
+  const riskConfig: RiskConfig = DEFAULT_RISK_CONFIG;
 
   // Seed historical trade logs from MongoDB on mount
   useEffect(() => {
@@ -63,22 +69,34 @@ export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
     const timeSinceLastTrade = now - lastTradeTimeRef.current;
     
     // Enforce cooldown
-    if (timeSinceLastTrade < COOLDOWN_MS) return;
+    if (timeSinceLastTrade < riskConfig.cooldownMs) return;
 
-    let action: 'BUY' | 'SELL' | null = null;
-
-    if (signal.overallSignal === 'STRONG BUY') {
-      action = 'BUY';
-    } else if (signal.overallSignal === 'STRONG SELL') {
-      action = 'SELL';
+    // Signal debounce: require same signal direction for 3 consecutive evaluations
+    if (signal.overallSignal === lastSignalRef.current) {
+      consecutiveSignalCountRef.current++;
+    } else {
+      consecutiveSignalCountRef.current = 1;
+      lastSignalRef.current = signal.overallSignal;
     }
 
-    if (action) {
-      executeTrade(action, signal.score);
-    }
-  }, [signal.overallSignal, isEnabled, isPaperTrade, signal.score]);
+    // Need at least 3 consecutive same-direction signals before acting
+    if (consecutiveSignalCountRef.current < 3) return;
 
-  const executeTrade = async (action: 'BUY' | 'SELL', signalScore: number) => {
+    // Check daily loss circuit breaker
+    if (!canTrade(dailyPnl, riskConfig)) {
+      console.log('[AUTO-TRADER] Daily loss limit reached, trading halted');
+      return;
+    }
+
+    // Use risk manager to determine if and how much to trade
+    const decision = shouldTrade(signal, riskConfig);
+
+    if (decision.action && decision.size > 0) {
+      executeTrade(decision.action, signal.score, decision.size);
+    }
+  }, [signal.overallSignal, isEnabled, isPaperTrade, signal.score, signal.confidence, dailyPnl]);
+
+  const executeTrade = async (action: 'BUY' | 'SELL', signalScore: number, size: number = 1) => {
     isExecutingRef.current = true;
     lastTradeTimeRef.current = Date.now();
 
@@ -91,6 +109,7 @@ export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
       signalScore,
       status: 'PENDING',
       isPaperTrade,
+      size,
     };
 
     setTradeLogs((prev) => [newLog, ...prev].slice(0, 50)); // Keep last 50
@@ -102,7 +121,7 @@ export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
         body: JSON.stringify({
           action,
           isPaperTrade,
-          size: 1 // Default safe size
+          size,
         }),
       });
 
@@ -112,7 +131,7 @@ export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
         setTradeLogs((prev) =>
           prev.map((log) =>
             log.id === logId
-              ? { ...log, status: 'SUCCESS', details: `Order ID: ${data.result?.id}` }
+              ? { ...log, status: 'SUCCESS', details: `Order ID: ${data.result?.id} | Size: ${size}` }
               : log
           )
         );
@@ -138,5 +157,6 @@ export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
     isPaperTrade,
     setIsPaperTrade,
     tradeLogs,
+    dailyPnl,
   };
 }

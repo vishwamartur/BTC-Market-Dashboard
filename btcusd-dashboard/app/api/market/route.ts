@@ -9,12 +9,13 @@ const BINANCE_FAPI = 'https://fapi.binance.com';
 
 export async function GET() {
   try {
-    const [lsRatioRes, oiRes, ttRatioRes, tickerRes, priceRes] = await Promise.allSettled([
+    const [lsRatioRes, oiRes, ttRatioRes, tickerRes, priceRes, fundingRes] = await Promise.allSettled([
       fetch(`${BINANCE_FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1`),
       fetch(`${BINANCE_FAPI}/fapi/v1/openInterest?symbol=BTCUSDT`),
       fetch(`${BINANCE_FAPI}/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1`),
       fetch(`${BINANCE_FAPI}/fapi/v1/ticker/24hr?symbol=BTCUSDT`),
       fetch(`${BINANCE_FAPI}/fapi/v1/ticker/price?symbol=BTCUSDT`),
+      fetch(`${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`),
     ]);
 
     const extract = async (res: PromiseSettledResult<Response>) => {
@@ -29,6 +30,7 @@ export async function GET() {
     const topTraderRatio = await extract(ttRatioRes);
     const ticker = await extract(tickerRes);
     const priceData = await extract(priceRes);
+    const fundingData = await extract(fundingRes);
 
     const response = {
       longShortRatio: Array.isArray(longShortRatio) && longShortRatio.length > 0
@@ -40,6 +42,9 @@ export async function GET() {
         : null,
       ticker,
       price: priceData,
+      fundingRate: Array.isArray(fundingData) && fundingData.length > 0
+        ? fundingData[fundingData.length - 1]
+        : null,
       timestamp: Date.now(),
     };
 

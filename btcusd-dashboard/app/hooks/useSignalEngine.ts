@@ -13,6 +13,10 @@ interface UseSignalEngineProps {
   fastestFee: number | null;
   whaleTransactions: WhaleTransaction[];
   hashrateData: HashrateData | null;
+  // New v2 inputs
+  fundingRate: number | null;
+  recentPrices: number[];
+  oiHistory: number[];
 }
 
 export function useSignalEngine({
@@ -22,6 +26,9 @@ export function useSignalEngine({
   fastestFee,
   whaleTransactions,
   hashrateData,
+  fundingRate,
+  recentPrices,
+  oiHistory,
 }: UseSignalEngineProps): SignalResult {
   return useMemo(() => {
     let hashrateTrend: 'UP' | 'DOWN' | 'FLAT' | null = null;
@@ -41,6 +48,9 @@ export function useSignalEngine({
       fastestFee,
       whaleTransactions,
       hashrateTrend,
+      fundingRate,
+      recentPrices,
+      oiHistory,
     };
 
     return generateTradingSignal(inputs);
@@ -51,5 +61,8 @@ export function useSignalEngine({
     fastestFee,
     whaleTransactions,
     hashrateData,
+    fundingRate,
+    recentPrices,
+    oiHistory,
   ]);
 }

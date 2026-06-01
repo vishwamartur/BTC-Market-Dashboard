@@ -56,6 +56,13 @@ export function useLiquidationData() {
   const [prevPrice, setPrevPrice] = useState<number>(0);
   const [wsStatus, setWsStatus] = useState<Record<string, boolean>>({});
   const [lastUpdate, setLastUpdate] = useState<number>(0);
+  const [fundingRate, setFundingRate] = useState<number | null>(null);
+
+  // Track price and OI history for the signal engine
+  const priceHistoryRef = useRef<number[]>([]);
+  const oiHistoryRef = useRef<number[]>([]);
+  const [priceHistory, setPriceHistory] = useState<number[]>([]);
+  const [oiHistory, setOiHistory] = useState<number[]>([]);
 
   // Poll REST APIs for market data (OI, ratios, etc.)
   useEffect(() => {
@@ -69,8 +76,20 @@ export function useLiquidationData() {
 
         if (data.ticker) setTicker(data.ticker);
         if (data.longShortRatio) setLongShortRatio(data.longShortRatio);
-        if (data.openInterest) setOpenInterest(data.openInterest);
+        if (data.openInterest) {
+          setOpenInterest(data.openInterest);
+          // Track OI history
+          const oiVal = parseFloat(data.openInterest.openInterest);
+          if (!isNaN(oiVal) && oiVal > 0) {
+            oiHistoryRef.current.push(oiVal);
+            if (oiHistoryRef.current.length > 50) oiHistoryRef.current.shift();
+            setOiHistory([...oiHistoryRef.current]);
+          }
+        }
         if (data.topTraderRatio) setTopTraderRatio(data.topTraderRatio);
+        if (data.fundingRate && data.fundingRate.fundingRate) {
+          setFundingRate(parseFloat(data.fundingRate.fundingRate));
+        }
 
       } catch (err) {
         console.error('Market data fetch error:', err);
@@ -181,6 +200,10 @@ export function useLiquidationData() {
               const newPrice = parseFloat(raw.p);
               setPrice((prev) => {
                 if (prev !== newPrice) setPrevPrice(prev);
+                // Track price history for signal engine
+                priceHistoryRef.current.push(newPrice);
+                if (priceHistoryRef.current.length > 50) priceHistoryRef.current.shift();
+                setPriceHistory([...priceHistoryRef.current]);
                 return newPrice;
               });
               setLastUpdate(Date.now());
@@ -286,5 +309,8 @@ export function useLiquidationData() {
     prevPrice,
     wsStatus,
     lastUpdate,
+    fundingRate,
+    priceHistory,
+    oiHistory,
   };
 }

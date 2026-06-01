@@ -63,7 +63,7 @@ export default function AutoTraderControl({
 
       <div style={{ padding: '16px 0 0 0' }}>
         <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px', lineHeight: '1.5' }}>
-          Bot will automatically buy or sell 1 contract on Delta Exchange when the Signal Engine reaches a <strong>STRONG BUY</strong> or <strong>STRONG SELL</strong>. Minimum cooldown between trades is 5 minutes.
+          Bot executes trades on Delta Exchange when the v2 Signal Engine reaches <strong>STRONG BUY</strong> or <strong>STRONG SELL</strong> for 3+ consecutive evaluations. Position size scales with confidence (1–5 contracts). Daily loss limit: $100. Cooldown: 5 min.
         </p>
 
         <div style={{

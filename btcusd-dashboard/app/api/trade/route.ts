@@ -4,27 +4,30 @@ import { insertOneAsync } from '../../lib/db';
 
 export const runtime = 'nodejs';
 
-// Force recompile 1
-
-// Delta API Keys provided by user
-const DELTA_API_KEY = process.env.DELTA_API_KEY || 'Wv0pZFoNN5PbQiwJp7cgvkJ9Fs2LUV';
-const DELTA_API_SECRET = process.env.DELTA_API_SECRET || 'FSsVzjpf2OY4JDJyFsqplKONwvRLMxuytZvMOmFQGHfu6NvFvO4k3KpUHxUI';
+// Delta API Keys — MUST be set in .env.local, no hardcoded fallbacks
+const DELTA_API_KEY = process.env.DELTA_API_KEY || '';
+const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 
 // Product ID 27 is BTCUSD linear perp on Delta Exchange India
 const BTCUSDT_PRODUCT_ID = 27;
 const LEVERAGE = 20;
 
-// To ensure we don't accidentally risk too much, limit trade size to 1 contract (smallest size)
+// Server-side safety limits
 const DEFAULT_TRADE_SIZE = 1;
+const MAX_TRADE_SIZE = 5; // Hard cap regardless of client request
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, size = DEFAULT_TRADE_SIZE, isPaperTrade = false } = body;
+    // Default to paper trade for safety — client must explicitly set isPaperTrade=false
+    const { action, size: rawSize = DEFAULT_TRADE_SIZE, isPaperTrade = true } = body;
 
     if (!['BUY', 'SELL'].includes(action)) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
+
+    // Server-side size validation
+    const size = Math.min(Math.max(1, Math.floor(Number(rawSize) || 1)), MAX_TRADE_SIZE);
 
     const side = action === 'BUY' ? 'buy' : 'sell';
 
@@ -58,6 +61,12 @@ export async function POST(request: Request) {
       return NextResponse.json(paperResult);
     }
 
+    // Live trading — verify credentials exist
+    if (!DELTA_API_KEY || !DELTA_API_SECRET) {
+      console.error('[REAL TRADE] Missing DELTA_API_KEY or DELTA_API_SECRET in env');
+      return NextResponse.json({ error: 'Delta API credentials not configured' }, { status: 500 });
+    }
+
     console.log(`[REAL TRADE] Preparing order to Delta: ${side.toUpperCase()} ${size} contracts`);
 
     // 1. Set Leverage
@@ -71,7 +80,8 @@ export async function POST(request: Request) {
     // 2. Fetch Ticker for Best Price
     let limitPrice: string | undefined;
     try {
-      const tickerRes = await fetch('https://api.india.delta.exchange/v2/tickers/BTCUSD');
+      const baseUrl = process.env.DELTA_BASE_URL || 'https://api.india.delta.exchange';
+      const tickerRes = await fetch(`${baseUrl}/v2/tickers/BTCUSD`);
       const tickerData = await tickerRes.json();
       if (tickerData.success) {
         // Use best_bid for Buy (Maker), best_ask for Sell (Maker)

@@ -78,6 +78,21 @@ export async function fetch24hTicker(): Promise<{ lastPrice: string; priceChange
   return res.json();
 }
 
+export interface FundingRateData {
+  symbol: string;
+  fundingRate: string;
+  fundingTime: number;
+  markPrice: string;
+}
+
+export async function fetchFundingRate(): Promise<FundingRateData[]> {
+  const res = await fetch(
+    `${BINANCE_FAPI_BASE}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=10`
+  );
+  if (!res.ok) throw new Error('Failed to fetch funding rate');
+  return res.json();
+}
+
 // --- PARSERS ---
 
 export function parseBinanceLiquidationEvent(data: Record<string, unknown>): LiquidationEvent {

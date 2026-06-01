@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 import { getDb } from '../../../lib/db';
 import { getDeltaFills } from '../../../lib/delta';
 
-const DELTA_API_KEY = process.env.DELTA_API_KEY || 'Wv0pZFoNN5PbQiwJp7cgvkJ9Fs2LUV';
-const DELTA_API_SECRET = process.env.DELTA_API_SECRET || 'FSsVzjpf2OY4JDJyFsqplKONwvRLMxuytZvMOmFQGHfu6NvFvO4k3KpUHxUI';
+const DELTA_API_KEY = process.env.DELTA_API_KEY || '';
+const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 const BTCUSDT_PRODUCT_ID = 27;
 
 export const runtime = 'nodejs';
