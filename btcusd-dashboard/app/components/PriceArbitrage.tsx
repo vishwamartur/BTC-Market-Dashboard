@@ -10,6 +10,7 @@ export default function PriceArbitrage() {
     isPaperTrade,
     setIsPaperTrade,
     prices,
+    latencies,
     spreadPct,
     position,
     logs
@@ -73,9 +74,9 @@ export default function PriceArbitrage() {
 
       {/* Price Tickers */}
       <div style={{ display: 'flex', gap: '16px', marginBottom: '24px' }}>
-        <PriceBox label="Binance (Ref)" price={prices.binance} />
-        <PriceBox label="Bybit" price={prices.bybit} />
-        <PriceBox label="Delta (Trade)" price={prices.delta} highlight />
+        <PriceBox label="Binance (Ref)" price={prices.binance} latency={latencies.binance} />
+        <PriceBox label="Bybit" price={prices.bybit} latency={latencies.bybit} />
+        <PriceBox label="Delta (Trade)" price={prices.delta} latency={latencies.delta} highlight />
       </div>
 
       {/* Spread Gauge */}
@@ -184,7 +185,14 @@ export default function PriceArbitrage() {
   );
 }
 
-function PriceBox({ label, price, highlight = false }: { label: string, price: number | null, highlight?: boolean }) {
+function PriceBox({ label, price, latency, highlight = false }: { label: string, price: number | null, latency?: number | null, highlight?: boolean }) {
+  let latencyColor = 'var(--text-muted)';
+  if (latency) {
+    if (latency < 200) latencyColor = 'var(--green)';
+    else if (latency < 500) latencyColor = 'var(--amber)';
+    else latencyColor = 'var(--red)';
+  }
+
   return (
     <div style={{ 
       flex: 1, 
@@ -192,13 +200,28 @@ function PriceBox({ label, price, highlight = false }: { label: string, price: n
       background: highlight ? 'rgba(0, 191, 255, 0.05)' : 'rgba(0,0,0,0.2)', 
       border: `1px solid ${highlight ? 'rgba(0, 191, 255, 0.2)' : 'rgba(255,255,255,0.05)'}`,
       borderRadius: 'var(--radius-xs)',
-      textAlign: 'center'
+      textAlign: 'center',
+      position: 'relative'
     }}>
       <div style={{ fontSize: '10px', color: highlight ? 'var(--blue)' : 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
         {label}
       </div>
       <div style={{ fontFamily: 'var(--font-mono)', fontSize: '16px', fontWeight: highlight ? 700 : 500, color: 'var(--text-primary)' }}>
         {price ? price.toFixed(1) : '---'}
+      </div>
+      <div style={{ 
+        position: 'absolute', 
+        top: '4px', 
+        right: '6px', 
+        fontSize: '9px', 
+        fontFamily: 'var(--font-mono)', 
+        color: latencyColor,
+        display: 'flex',
+        alignItems: 'center',
+        gap: '2px'
+      }}>
+        {latency ? `${latency}ms` : '---'}
+        {latency && <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: latencyColor, display: 'inline-block' }} />}
       </div>
     </div>
   );

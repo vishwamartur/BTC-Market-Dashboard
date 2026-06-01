@@ -42,6 +42,7 @@ export function usePriceArbitrage() {
     delta: null, 
     consensus: null
   });
+  const [latencies, setLatencies] = useState<{binance: number|null, bybit: number|null, delta: number|null}>({binance: null, bybit: null, delta: null});
   const [spreadPct, setSpreadPct] = useState<number>(0);
   
   const [position, setPosition] = useState<ArbPosition | null>(null);
@@ -66,6 +67,9 @@ export function usePriceArbitrage() {
           deltaAsk: data.prices.deltaAsk,
           consensus: data.prices.consensus
         });
+        if (data.latencies) {
+            setLatencies(data.latencies);
+        }
         setSpreadPct(data.spreadPct);
         
         // --- Trading Logic ---
@@ -181,6 +185,7 @@ export function usePriceArbitrage() {
     isPaperTrade,
     setIsPaperTrade,
     prices,
+    latencies,
     spreadPct,
     position,
     logs

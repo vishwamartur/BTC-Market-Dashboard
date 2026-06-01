@@ -10,10 +10,20 @@ export async function GET() {
     const BYBIT_API = 'https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT';
     const DELTA_API = 'https://api.india.delta.exchange/v2/tickers/BTCUSD';
 
-    const [binanceRes, bybitRes, deltaRes] = await Promise.allSettled([
-      fetch(BINANCE_API, { signal: AbortSignal.timeout(2000) }),
-      fetch(BYBIT_API, { signal: AbortSignal.timeout(2000) }),
-      fetch(DELTA_API, { signal: AbortSignal.timeout(2000) })
+    const timeFetch = async (url: string) => {
+      const start = Date.now();
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
+        return { res, latency: Date.now() - start };
+      } catch (error) {
+        return { res: null, latency: Date.now() - start };
+      }
+    };
+
+    const [binanceResult, bybitResult, deltaResult] = await Promise.all([
+      timeFetch(BINANCE_API),
+      timeFetch(BYBIT_API),
+      timeFetch(DELTA_API)
     ]);
 
     let binancePrice = null;
@@ -22,20 +32,20 @@ export async function GET() {
     let deltaBid = null;
     let deltaAsk = null;
 
-    if (binanceRes.status === 'fulfilled' && binanceRes.value.ok) {
-      const data = await binanceRes.value.json();
+    if (binanceResult.res && binanceResult.res.ok) {
+      const data = await binanceResult.res.json();
       binancePrice = parseFloat(data.price);
     }
 
-    if (bybitRes.status === 'fulfilled' && bybitRes.value.ok) {
-      const data = await bybitRes.value.json();
+    if (bybitResult.res && bybitResult.res.ok) {
+      const data = await bybitResult.res.json();
       if (data.result?.list?.[0]?.lastPrice) {
         bybitPrice = parseFloat(data.result.list[0].lastPrice);
       }
     }
 
-    if (deltaRes.status === 'fulfilled' && deltaRes.value.ok) {
-      const data = await deltaRes.value.json();
+    if (deltaResult.res && deltaResult.res.ok) {
+      const data = await deltaResult.res.json();
       if (data.success && data.result?.mark_price) {
         deltaPrice = parseFloat(data.result.mark_price);
         deltaBid = parseFloat(data.result.quotes?.best_bid || data.result.mark_price);
@@ -67,6 +77,11 @@ export async function GET() {
         deltaBid,
         deltaAsk,
         consensus: consensusPrice
+      },
+      latencies: {
+        binance: binanceResult.latency,
+        bybit: bybitResult.latency,
+        delta: deltaResult.latency
       },
       spreadPct,
       timestamp: Date.now()
