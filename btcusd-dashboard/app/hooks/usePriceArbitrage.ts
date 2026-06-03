@@ -122,6 +122,12 @@ export function usePriceArbitrage() {
         }
 
         setLogs(prev => [logEntry, ...prev].slice(0, 50));
+      } else {
+        // Handle failure
+        if (data?.error?.code === 'no_position_for_reduce_only') {
+          console.warn('Delta returned no_position_for_reduce_only. Clearing local position state.');
+          setPosition(null);
+        }
       }
     } catch (e) {
       console.error('Arb execution error', e);
