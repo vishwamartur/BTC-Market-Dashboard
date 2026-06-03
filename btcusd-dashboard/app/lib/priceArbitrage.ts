@@ -1,19 +1,23 @@
 export interface ArbitrageConfig {
-  entryThresholdPct: number;  // Enter when Delta deviates by this much % (default: 0.08% to clear fees)
-  exitThresholdPct: number;   // Exit when spread drops below this % (default: 0.02%)
-  stopLossPct: number;        // Stop loss if spread widens to this % (default: 0.20%)
-  maxHoldTimeMs: number;      // Max time to hold an arb trade (default: 60000ms / 60s)
-  maxDailyTrades: number;     // Cap daily trades (default: 50)
-  tradeSize: number;          // Size in contracts (default: 1)
+  entryThresholdPct: number;  // Enter when Delta deviates by this much % (must exceed roundTripFeePct)
+  exitThresholdPct: number;   // Exit when spread drops below this % (default: 0.03%)
+  stopLossPct: number;        // Stop loss if spread widens to this % (default: 0.30%)
+  maxHoldTimeMs: number;      // Max time to hold an arb trade (default: 180000ms / 3min)
+  maxDailyTrades: number;     // Cap daily trades (default: 30)
+  tradeSize: number;          // Size in contracts (default: 15)
+  takerFeePct: number;        // Taker fee per side (default: 0.05%)
+  roundTripFeePct: number;    // Total round-trip fee cost (default: 0.10%)
 }
 
 export const DEFAULT_ARB_CONFIG: ArbitrageConfig = {
-  entryThresholdPct: 0.08,
-  exitThresholdPct: 0.02,
-  stopLossPct: 0.20,
-  maxHoldTimeMs: 60000, 
-  maxDailyTrades: 50,
-  tradeSize: 15
+  entryThresholdPct: 0.18,    // Must be > roundTripFeePct (0.10%) to be profitable
+  exitThresholdPct: 0.03,     // Exit when spread converges to near zero
+  stopLossPct: 0.30,          // Wider stop to avoid premature exits
+  maxHoldTimeMs: 180000,      // 3 minutes — give spread time to converge
+  maxDailyTrades: 30,
+  tradeSize: 15,
+  takerFeePct: 0.05,          // 0.05% per side on Delta Exchange
+  roundTripFeePct: 0.10,      // 0.05% × 2 sides
 };
 
 export type ArbAction = 'BUY_DELTA' | 'SELL_DELTA' | 'NONE';
@@ -30,15 +34,27 @@ export function calculateSpread(refPrice: number, deltaPrice: number): number {
 
 /**
  * Determines if a new arbitrage trade should be entered.
- * Returns the action to take and the current spread.
+ * Includes a fee-aware guard: rejects entries where expected profit < fees.
+ * Also rejects wildly divergent prices (>5%) as likely data errors.
  */
 export function shouldEnterTrade(
   refPrice: number, 
   deltaPrice: number, 
   config: ArbitrageConfig = DEFAULT_ARB_CONFIG
-): { action: ArbAction, spread: number } {
+): { action: ArbAction, spread: number, reason?: string } {
   const spread = calculateSpread(refPrice, deltaPrice);
   const absSpread = Math.abs(spread);
+
+  // Sanity check: if spread is >5%, something is wrong (possible USD/INR mismatch or stale data)
+  if (absSpread > 5.0) {
+    console.warn(`[ARB] Rejecting entry — spread ${spread.toFixed(3)}% is unreasonably large. Possible data error.`);
+    return { action: 'NONE', spread, reason: 'SPREAD_TOO_LARGE' };
+  }
+
+  // Fee-aware guard: entry spread must exceed round-trip fees to be profitable
+  if (absSpread < config.roundTripFeePct) {
+    return { action: 'NONE', spread, reason: 'BELOW_FEE_THRESHOLD' };
+  }
 
   if (absSpread >= config.entryThresholdPct) {
     if (spread < 0) {

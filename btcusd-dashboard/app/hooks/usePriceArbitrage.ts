@@ -13,6 +13,7 @@ export interface ArbPosition {
   entrySpread: number;
   entryTime: number;
   size: number;
+  orderId?: number;
 }
 
 export interface ArbLog {
@@ -22,6 +23,32 @@ export interface ArbLog {
   spread: number;
   price: number;
   pnl?: number;
+  fillStatus?: string;
+}
+
+// Key for persisting position state in localStorage
+const POSITION_STORAGE_KEY = 'arbTrader_position';
+const ENABLED_STORAGE_KEY = 'arbTrader_isEnabled';
+
+function loadPosition(): ArbPosition | null {
+  try {
+    const raw = localStorage.getItem(POSITION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.side && parsed.entryPrice) return parsed;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function savePosition(position: ArbPosition | null) {
+  try {
+    if (position) {
+      localStorage.setItem(POSITION_STORAGE_KEY, JSON.stringify(position));
+    } else {
+      localStorage.removeItem(POSITION_STORAGE_KEY);
+    }
+  } catch { /* ignore */ }
 }
 
 export function usePriceArbitrage() {
@@ -31,7 +58,7 @@ export function usePriceArbitrage() {
   useEffect(() => {
     let savedEnabled: boolean | null = null;
     try {
-      const rawEnabled = localStorage.getItem('arbTrader_isEnabled');
+      const rawEnabled = localStorage.getItem(ENABLED_STORAGE_KEY);
       if (rawEnabled !== null) {
         const parsed = JSON.parse(rawEnabled);
         if (typeof parsed === 'boolean') savedEnabled = parsed;
@@ -48,7 +75,7 @@ export function usePriceArbitrage() {
 
   useEffect(() => {
     if (isLoaded) {
-      localStorage.setItem('arbTrader_isEnabled', JSON.stringify(isEnabled));
+      localStorage.setItem(ENABLED_STORAGE_KEY, JSON.stringify(isEnabled));
     }
   }, [isEnabled, isLoaded]);
   
@@ -68,13 +95,61 @@ export function usePriceArbitrage() {
   const [latencies, setLatencies] = useState<{binance: number|null, bybit: number|null, delta: number|null}>({binance: null, bybit: null, delta: null});
   const [spreadPct, setSpreadPct] = useState<number>(0);
   
-  const [position, setPosition] = useState<ArbPosition | null>(null);
+  // Position state — initialized from localStorage for persistence across refreshes
+  const [position, setPosition] = useState<ArbPosition | null>(() => loadPosition());
   const [logs, setLogs] = useState<ArbLog[]>([]);
   
   const isExecutingRef = useRef(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const reconcileCounterRef = useRef(0);
+
+  // Persist position changes to localStorage
+  useEffect(() => {
+    if (isLoaded) {
+      savePosition(position);
+    }
+  }, [position, isLoaded]);
+
+  /**
+   * Reconcile local position state with actual exchange position.
+   * Runs every ~10 poll cycles to avoid hammering the API.
+   */
+  const reconcilePosition = useCallback(async () => {
+    try {
+      const res = await fetch('/api/position');
+      if (!res.ok) return; // 502s are common, don't clear state on them
+
+      const data = await res.json();
+      
+      if (data.success && data.position) {
+        // Exchange has an open position
+        const exchangePos = data.position;
+        
+        if (!position) {
+          // We lost local state but exchange has a position — recover it
+          console.warn('[ARB] Recovered position from exchange:', exchangePos);
+          setPosition({
+            side: exchangePos.side === 'LONG' ? 'BUY_DELTA' : 'SELL_DELTA',
+            entryPrice: exchangePos.entryPrice || 0,
+            entrySpread: 0, // unknown, but we need to manage the position
+            entryTime: Date.now() - 30000, // assume it's been open for a bit
+            size: exchangePos.size || DEFAULT_ARB_CONFIG.tradeSize,
+          });
+        }
+      } else if (data.success && !data.position) {
+        // Exchange has no position
+        if (position) {
+          console.warn('[ARB] Local state shows position but exchange has none. Clearing local state.');
+          setPosition(null);
+        }
+      }
+    } catch {
+      // Silent — don't disrupt the main loop for reconciliation failures
+    }
+  }, [position]);
 
   const executeTrade = useCallback(async (action: string, limitPrice: number, reason: string, currentSpread: number, exitingPos?: ArbPosition) => {
+    if (isExecutingRef.current) return;
     isExecutingRef.current = true;
     
     const size = DEFAULT_ARB_CONFIG.tradeSize;
@@ -94,41 +169,49 @@ export function usePriceArbitrage() {
       
       const data = await res.json();
       
-      if (res.ok && data.success) {
-        // Success
-        const logEntry: ArbLog = {
-          id: Math.random().toString(36).substr(2, 9),
-          time: new Date(),
-          action,
-          spread: currentSpread,
-          price: limitPrice
-        };
+      const logEntry: ArbLog = {
+        id: Math.random().toString(36).substr(2, 9),
+        time: new Date(),
+        action,
+        spread: currentSpread,
+        price: limitPrice,
+        fillStatus: data.filled ? 'FILLED' : (data.cancelReason || 'FAILED'),
+      };
+
+      if (res.ok && data.success && data.filled) {
+        // Order was placed AND filled — safe to update position state
+        const actualFillPrice = data.fillPrice || limitPrice;
 
         if (action === 'BUY_DELTA' || action === 'SELL_DELTA') {
           setPosition({
             side: action as 'BUY_DELTA' | 'SELL_DELTA',
-            entryPrice: limitPrice,
+            entryPrice: actualFillPrice,
             entrySpread: currentSpread,
             entryTime: Date.now(),
-            size
+            size,
+            orderId: data.orderId,
           });
         } else if (exitingPos) {
-           // Calculate PNL
+           // Calculate PNL using actual fill price
            const diff = action === 'CLOSE_LONG' 
-             ? limitPrice - exitingPos.entryPrice 
-             : exitingPos.entryPrice - limitPrice;
+             ? actualFillPrice - exitingPos.entryPrice 
+             : exitingPos.entryPrice - actualFillPrice;
            logEntry.pnl = diff * size;
            setPosition(null);
         }
-
-        setLogs(prev => [logEntry, ...prev].slice(0, 50));
+      } else if (!data.filled && data.cancelReason === 'cancelled_timeout') {
+        // Order was placed but NOT filled — cancelled automatically
+        // Don't update position state — no trade happened
+        console.log(`[ARB] Order not filled, cancelled. Reason: ${data.cancelReason}`);
       } else {
-        // Handle failure
+        // Handle other failures
         if (data?.error?.code === 'no_position_for_reduce_only') {
           console.warn('Delta returned no_position_for_reduce_only. Clearing local position state.');
           setPosition(null);
         }
       }
+
+      setLogs(prev => [logEntry, ...prev].slice(0, 50));
     } catch (e) {
       console.error('Arb execution error', e);
     } finally {
@@ -136,7 +219,7 @@ export function usePriceArbitrage() {
     }
   }, []);
 
-  // Poll prices rapidly
+  // Poll prices and run trading logic
   useEffect(() => {
     const fetchPrices = async () => {
       try {
@@ -157,6 +240,13 @@ export function usePriceArbitrage() {
         }
         setSpreadPct(data.spreadPct);
         
+        // --- Periodic Position Reconciliation ---
+        reconcileCounterRef.current++;
+        if (reconcileCounterRef.current >= 10) {
+          reconcileCounterRef.current = 0;
+          reconcilePosition();
+        }
+
         // --- Trading Logic ---
         if (!isEnabled || isExecutingRef.current) return;
         if (!data.prices.consensus || !data.prices.delta) return;
@@ -173,7 +263,7 @@ export function usePriceArbitrage() {
 
           if (exitCheck.shouldExit) {
             const exitAction = position.side === 'BUY_DELTA' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
-            const exitPrice = position.side === 'BUY_DELTA' ? data.prices.deltaBid : data.prices.deltaAsk; // hit the bid to close long, hit ask to close short
+            const exitPrice = position.side === 'BUY_DELTA' ? data.prices.deltaBid : data.prices.deltaAsk;
             executeTrade(exitAction, exitPrice || data.prices.delta, exitCheck.reason, data.spreadPct, position);
           }
           return;
@@ -194,7 +284,7 @@ export function usePriceArbitrage() {
 
     if (isEnabled) {
         fetchPrices(); // immediate fetch
-        pollIntervalRef.current = setInterval(fetchPrices, 1000); // 1s polling for arb
+        pollIntervalRef.current = setInterval(fetchPrices, 2000); // 2s polling (reduced from 1s to lower API load)
     } else {
         // slower polling just for UI if disabled
         fetchPrices();
@@ -204,7 +294,7 @@ export function usePriceArbitrage() {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [isEnabled, position, executeTrade]);
+  }, [isEnabled, position, executeTrade, reconcilePosition]);
 
   return {
     isEnabled,

@@ -63,6 +63,18 @@ export async function GET() {
       consensusPrice = deltaPrice;
     }
 
+    // Sanity check: detect possible USD/INR mismatch or stale data
+    // If Delta price is >5x or <0.2x the consensus, something is very wrong
+    if (consensusPrice && deltaPrice) {
+      const ratio = deltaPrice / consensusPrice;
+      if (ratio > 5 || ratio < 0.2) {
+        console.error(`[ARB PRICES] CRITICAL: Delta price ($${deltaPrice}) is ${ratio.toFixed(1)}x consensus ($${consensusPrice}). Possible USD/INR mismatch or stale data. Skipping Delta price.`);
+        deltaPrice = null;
+        deltaBid = null;
+        deltaAsk = null;
+      }
+    }
+
     // Calculate spread if we have consensus and delta prices
     let spreadPct = 0;
     if (consensusPrice && deltaPrice) {

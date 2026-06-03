@@ -221,3 +221,94 @@ export async function getDeltaWalletBalances(apiKey: string, apiSecret: string) 
     return { success: false, error: getErrorMessage(error) };
   }
 }
+
+export async function getOrderById(apiKey: string, apiSecret: string, orderId: number) {
+  const method = 'GET';
+  const path = `/v2/orders/${orderId}`;
+  const payload = '';
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+
+  try {
+    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
+      method: method,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'api-key': apiKey,
+        'timestamp': timestamp,
+        'signature': signature,
+      },
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error: unknown) {
+    console.error('Delta Exchange API Error (GetOrder):', error);
+    return { success: false, error: getErrorMessage(error) };
+  }
+}
+
+export async function cancelOrder(apiKey: string, apiSecret: string, orderId: number, productId: number) {
+  const method = 'DELETE';
+  const path = '/v2/orders';
+  const payloadObj = {
+    id: orderId,
+    product_id: productId,
+  };
+  const payload = JSON.stringify(payloadObj);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+
+  try {
+    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
+      method: method,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'api-key': apiKey,
+        'timestamp': timestamp,
+        'signature': signature,
+      },
+      body: payload,
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error: unknown) {
+    console.error('Delta Exchange API Error (Cancel):', error);
+    return { success: false, error: getErrorMessage(error) };
+  }
+}
+
+export async function getOpenOrders(apiKey: string, apiSecret: string, productId?: number) {
+  const method = 'GET';
+  let path = '/v2/orders?state=open';
+  if (productId) {
+    path += `&product_id=${productId}`;
+  }
+  const payload = '';
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+
+  try {
+    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
+      method: method,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'api-key': apiKey,
+        'timestamp': timestamp,
+        'signature': signature,
+      },
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error: unknown) {
+    console.error('Delta Exchange API Error (OpenOrders):', error);
+    return { success: false, error: getErrorMessage(error) };
+  }
+}
+
