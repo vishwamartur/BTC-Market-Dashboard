@@ -10,12 +10,28 @@ export interface DeltaOrderResponse {
     size: number;
     side: string;
     state: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   error?: {
     code: string;
-    context: any;
+    context: unknown;
   };
+}
+
+export interface DeltaPositionResponse {
+  success: boolean;
+  result?: unknown;
+  error?: unknown;
+}
+
+interface PlaceOrderOptions {
+  reduceOnly?: boolean;
+  cancelOrdersAccepted?: boolean;
+  clientOrderId?: string;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function generateSignature(method: string, path: string, payload: string, apiSecret: string, timestamp: string): string {
@@ -30,11 +46,12 @@ export async function placeDeltaOrder(
   size: number,
   side: 'buy' | 'sell',
   orderType: 'market' | 'limit' = 'market',
-  limitPrice?: string
+  limitPrice?: string,
+  options: PlaceOrderOptions = {}
 ): Promise<DeltaOrderResponse> {
   const method = 'POST';
   const path = '/v2/orders';
-  const payloadObj: any = {
+  const payloadObj: Record<string, unknown> = {
     product_id: productId,
     size: size,
     side: side,
@@ -42,6 +59,15 @@ export async function placeDeltaOrder(
   };
   if (limitPrice) {
     payloadObj.limit_price = limitPrice;
+  }
+  if (options.reduceOnly !== undefined) {
+    payloadObj.reduce_only = options.reduceOnly;
+  }
+  if (options.cancelOrdersAccepted !== undefined) {
+    payloadObj.cancel_orders_accepted = options.cancelOrdersAccepted;
+  }
+  if (options.clientOrderId) {
+    payloadObj.client_order_id = options.clientOrderId;
   }
   const payload = JSON.stringify(payloadObj);
 
@@ -65,18 +91,18 @@ export async function placeDeltaOrder(
 
     const data = await response.json();
     return data as DeltaOrderResponse;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Delta Exchange API Error:', error);
     return {
       success: false,
-      error: { code: 'network_error', context: error.message },
+      error: { code: 'network_error', context: getErrorMessage(error) },
     };
   }
 }
 
-export async function getDeltaPositions(apiKey: string, apiSecret: string) {
+export async function getDeltaPositions(apiKey: string, apiSecret: string, productId?: number): Promise<DeltaPositionResponse> {
   const method = 'GET';
-  const path = '/v2/positions';
+  const path = productId ? `/v2/positions?product_id=${productId}` : '/v2/positions';
   const payload = '';
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const signature = generateSignature(method, path, payload, apiSecret, timestamp);
@@ -95,9 +121,9 @@ export async function getDeltaPositions(apiKey: string, apiSecret: string) {
 
     const data = await response.json();
     return data;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Delta Exchange API Error:', error);
-    return { success: false };
+    return { success: false, error: getErrorMessage(error) };
   }
 }
 
@@ -133,8 +159,8 @@ export async function setDeltaLeverage(
       return { success: true, result: data.result };
     }
     return { success: false, error: data.error };
-  } catch (error: any) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 }
 
@@ -162,8 +188,36 @@ export async function getDeltaFills(apiKey: string, apiSecret: string, productId
 
     const data = await response.json();
     return data;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Delta Exchange API Error (Fills):', error);
-    return { success: false, error: error.message };
+    return { success: false, error: getErrorMessage(error) };
+  }
+}
+
+export async function getDeltaWalletBalances(apiKey: string, apiSecret: string) {
+  const method = 'GET';
+  const path = '/v2/wallet/balances';
+  const payload = '';
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+
+  try {
+    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
+      method: method,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'api-key': apiKey,
+        'timestamp': timestamp,
+        'signature': signature,
+      },
+      cache: 'no-store',
+    });
+
+    const data = await response.json();
+    return data;
+  } catch (error: unknown) {
+    console.error('Delta Exchange API Error (Wallet):', error);
+    return { success: false, error: getErrorMessage(error) };
   }
 }

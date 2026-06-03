@@ -50,7 +50,6 @@ export async function GET(request: Request) {
       timestamp: string;
       action: string;
       side: string;
-      isPaperTrade: boolean;
       status: string;
       cumulativePnl: number;
       tradeNumber: number;
@@ -74,17 +73,9 @@ export async function GET(request: Request) {
       if (trade.status === 'SUCCESS') {
         let tradePnl = 0;
 
-        if (trade.isPaperTrade) {
-          // Simulate a random P&L between -50 and +80 for paper trades
-          const seed = trade.orderId || totalTrades;
-          const pseudoRandom = Math.sin(typeof seed === 'number' ? seed : parseInt(String(seed), 10) || totalTrades) * 43758.5453;
-          const normalized = pseudoRandom - Math.floor(pseudoRandom); // 0-1
-          tradePnl = (normalized * 130) - 50; 
-        } else {
-          // Use actual realized PnL from Delta Exchange fills
-          if (trade.orderId && orderPnlMap.has(Number(trade.orderId))) {
-            tradePnl = orderPnlMap.get(Number(trade.orderId))!;
-          }
+        // Use actual realized PnL from Delta Exchange fills.
+        if (trade.orderId && orderPnlMap.has(Number(trade.orderId))) {
+          tradePnl = orderPnlMap.get(Number(trade.orderId))!;
         }
 
         cumulativePnl += tradePnl;
@@ -97,7 +88,6 @@ export async function GET(request: Request) {
         timestamp: ts.toISOString(),
         action: trade.action,
         side: trade.side,
-        isPaperTrade: trade.isPaperTrade,
         status: trade.status,
         cumulativePnl: Math.round(cumulativePnl * 100) / 100,
         tradeNumber: totalTrades,

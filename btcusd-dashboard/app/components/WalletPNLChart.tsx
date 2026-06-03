@@ -4,11 +4,10 @@ import { useState, useEffect, useRef } from 'react';
 
 interface TradePnlData {
   timestamp: string;
-  action: string;
-  side: string;
-  status: string;
   cumulativePnl: number;
+  realizedPnl: number;
   tradeNumber: number;
+  rawFill?: any;
 }
 
 interface TradeStats {
@@ -25,23 +24,31 @@ function formatUsd(val: number): string {
   return `$${val.toFixed(0)}`;
 }
 
-export default function TradePerformance() {
+export default function WalletPNLChart() {
   const [pnlSeries, setPnlSeries] = useState<TradePnlData[]>([]);
   const [stats, setStats] = useState<TradeStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      setError(null);
       try {
-        const res = await fetch('/api/analytics/trades?limit=200');
-        if (!res.ok) return;
+        const res = await fetch('/api/wallet/pnl?limit=200');
         const data = await res.json();
+        
+        if (!res.ok || !data.success) {
+          setError(data.error || 'Failed to fetch PNL data');
+          return;
+        }
+        
         setPnlSeries(data.pnlSeries || []);
         setStats(data.stats || null);
-      } catch (err) {
-        console.error('Trade performance fetch error:', err);
+      } catch (err: any) {
+        console.error('Wallet PNL fetch error:', err);
+        setError(err.message || 'An error occurred while fetching PNL data.');
       } finally {
         setLoading(false);
       }
@@ -74,7 +81,7 @@ export default function TradePerformance() {
 
     // Find min and max PnL to scale the chart
     let minPnl = Math.min(0, ...pnlSeries.map(d => d.cumulativePnl));
-    let maxPnl = Math.max(100, ...pnlSeries.map(d => d.cumulativePnl));
+    let maxPnl = Math.max(10, ...pnlSeries.map(d => d.cumulativePnl)); // Default max to 10 so it's not totally flat if everything is 0
     
     // Add some padding to max/min
     const range = maxPnl - minPnl;
@@ -148,10 +155,21 @@ export default function TradePerformance() {
   }, [pnlSeries]);
 
   return (
-    <div className="card" id="trade-performance">
+    <div className="card" id="wallet-pnl-chart">
       <div className="card-header">
-        <span className="card-title">📈 Trade Performance</span>
+        <span className="card-title">📈 Delta Realized P&L</span>
+        {loading ? (
+          <span className="card-badge polling">Updating...</span>
+        ) : (
+          <span className="card-badge live">Live</span>
+        )}
       </div>
+
+      {error ? (
+        <div style={{ background: 'var(--red-dim)', color: 'var(--red)', padding: '16px', borderRadius: 'var(--radius-sm)', marginBottom: '24px', border: '1px solid var(--red)', fontSize: '14px' }}>
+          {error}
+        </div>
+      ) : null}
 
       {stats && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
@@ -166,29 +184,84 @@ export default function TradePerformance() {
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '20px', fontWeight: 700, color: 'var(--blue)' }}>{stats.winRate}%</div>
           </div>
           <div style={{ padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: 'var(--radius-xs)', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Wins</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Profitable Trades</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '20px', fontWeight: 700, color: 'var(--green)' }}>{stats.winCount}</div>
           </div>
           <div style={{ padding: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: 'var(--radius-xs)', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Losses</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '4px' }}>Losing Trades</div>
             <div style={{ fontFamily: 'var(--font-mono)', fontSize: '20px', fontWeight: 700, color: 'var(--red)' }}>{stats.lossCount}</div>
           </div>
         </div>
       )}
 
-      {loading && pnlSeries.length === 0 ? (
+      {loading && pnlSeries.length === 0 && !error ? (
         <div className="chart-empty">
           <div style={{ fontSize: '32px', opacity: 0.5 }}>📉</div>
           <p>Loading performance data...</p>
         </div>
-      ) : pnlSeries.length === 0 ? (
+      ) : pnlSeries.length <= 1 && !error ? (
         <div className="chart-empty">
           <div style={{ fontSize: '32px', opacity: 0.5 }}>📉</div>
-          <p>No trades yet to plot PnL...</p>
+          <p>No fill history found on Delta Exchange to plot P&L.</p>
         </div>
       ) : (
-        <div style={{ position: 'relative' }}>
-          <canvas ref={canvasRef} style={{ width: '100%', height: '240px' }} />
+        <div style={{ position: 'relative', marginBottom: '32px' }}>
+          <canvas ref={canvasRef} style={{ width: '100%', height: '240px', display: (pnlSeries.length > 1 && !error) ? 'block' : 'none' }} />
+        </div>
+      )}
+
+      {pnlSeries.length > 1 && (
+        <div style={{ marginTop: '24px', borderTop: '1px solid var(--border-color)', paddingTop: '20px' }}>
+          <div className="card-title" style={{ marginBottom: '16px', fontSize: '13px' }}>📋 Recent Trade Logs</div>
+          <div className="feed-container" style={{ maxHeight: '400px' }}>
+            <table className="feed-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Size @ Price</th>
+                  <th>Realized P&L</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pnlSeries
+                  .filter((p) => p.tradeNumber > 0)
+                  .reverse()
+                  .map((p, i) => (
+                    <tr key={i} className="feed-row">
+                      <td style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                        {new Date(p.timestamp).toLocaleString()}
+                      </td>
+                      <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                        {p.rawFill?.symbol || p.rawFill?.contract_symbol || 'BTCUSDT'}
+                      </td>
+                      <td>
+                        {p.rawFill?.side ? (
+                          <span className={`side-badge ${p.rawFill.side.toLowerCase()}`}>
+                            {p.rawFill.side.toUpperCase()}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>
+                        {p.rawFill?.size ? `${p.rawFill.size}` : '—'} 
+                        {p.rawFill?.price ? <span style={{color: 'var(--text-muted)'}}> @ ${p.rawFill.price}</span> : ''}
+                      </td>
+                      <td style={{ 
+                        fontFamily: 'var(--font-mono)', 
+                        fontWeight: 600,
+                        fontSize: '15px',
+                        color: p.realizedPnl > 0 ? 'var(--green)' : p.realizedPnl < 0 ? 'var(--red)' : 'var(--text-primary)'
+                      }}>
+                        {p.realizedPnl > 0 ? '+' : ''}{p.realizedPnl !== 0 ? formatUsd(p.realizedPnl) : '$0'}
+                      </td>
+                    </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>

@@ -13,8 +13,9 @@ A real-time, comprehensive Bitcoin (BTC) market analytics and automated trading 
 ### 🤖 Autonomous Trading Engine (Autobot)
 - **Signal Engine:** Evaluates market conditions (Liquidation Heat, Whale Flows, OI Divergence, Technicals) to generate a dynamic trading score (-1.0 to +1.0).
 - **Automated Execution:** Triggers `STRONG BUY` or `STRONG SELL` signals when extreme market conditions are met.
+- **Position Lifecycle:** Syncs open Delta BTC positions, blocks duplicate entries, and exits existing positions with reduce-only close orders on manual close or opposite strong signals.
 - **Delta Exchange Integration:** Automatically places exact **Maker Limit Orders** at the absolute best bid/ask with pre-configured **20x Leverage**.
-- **Risk Management:** 5-minute hard cooldowns between trades, fixed minimal contract sizes, and paper-trading simulation modes.
+- **Risk Management:** 5-minute hard cooldowns between trades, fixed minimal contract sizes, and live Delta execution safeguards.
 
 ### 🗄️ Historical Data Persistence
 - **MongoDB Atlas Integration:** Stores all historical trades, executed orders, and deep market snapshots for long-term backtesting and UI rendering.
@@ -66,4 +67,4 @@ A real-time, comprehensive Bitcoin (BTC) market analytics and automated trading 
 5. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## ⚠️ Disclaimer
-**This software is for educational purposes only.** Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. The creators assume no responsibility for your trading results. Always test your strategies in paper-trading mode before risking live capital.
+**This software is for educational purposes only.** Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. The creators assume no responsibility for your trading results. Live trading can create real financial losses.

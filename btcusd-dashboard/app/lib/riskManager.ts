@@ -10,6 +10,9 @@ export interface RiskConfig {
   riskRewardRatio: number;        // e.g. 2 — take-profit distance = riskRewardRatio × stop distance
   stopLossAtrMultiplier: number;  // e.g. 1.5 — stop = 1.5 × ATR from entry
   cooldownMs: number;             // e.g. 300000 — minimum ms between trades
+  takerFeePct: number;            // e.g. 0.0005 (0.05%) taker fee per side
+  estimatedWinPct: number;        // e.g. 0.003 (0.3%) average winning move
+  estimatedLossPct: number;       // e.g. 0.0015 (0.15%) average losing move
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -19,6 +22,9 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   riskRewardRatio: 2.0,
   stopLossAtrMultiplier: 1.5,
   cooldownMs: 5 * 60 * 1000, // 5 minutes
+  takerFeePct: 0.0005, // 0.05% Delta Exchange taker fee
+  estimatedWinPct: 0.003, // 0.3% expected win move
+  estimatedLossPct: 0.0015, // 0.15% expected loss move
 };
 
 /**
@@ -95,8 +101,24 @@ export function getTakeProfit(
 }
 
 /**
+ * Calculate the expected net value (E_net) of a trade in percentage terms.
+ * E_net = p * avg_win - (1-p) * avg_loss - round_trip_fee
+ */
+export function calculateExpectedNetValue(
+  confidence: number,
+  config: RiskConfig = DEFAULT_RISK_CONFIG
+): number {
+  const p = confidence / 100;
+  const roundTripFee = config.takerFeePct * 2;
+  
+  const eNet = (p * config.estimatedWinPct) - ((1 - p) * config.estimatedLossPct) - roundTripFee;
+  return eNet;
+}
+
+/**
  * Determine if the signal is strong enough and in the right direction to trade.
  * Adds hysteresis: signal must be above threshold (not just barely crossing it).
+ * Includes a fee-aware expected value filter.
  */
 export function shouldTrade(
   signal: { overallSignal: string; confidence: number; score: number },
@@ -116,6 +138,13 @@ export function shouldTrade(
   }
 
   if (!action) return { action: null, size: 0 };
+
+  // Fee-aware expected value filter
+  const eNet = calculateExpectedNetValue(signal.confidence, config);
+  if (eNet <= 0) {
+    console.log(`[RISK] Skipping trade due to negative expected value: ${(eNet * 100).toFixed(3)}%`);
+    return { action: null, size: 0 };
+  }
 
   const size = calculatePositionSize(signal.confidence, config);
   return { action, size };

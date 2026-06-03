@@ -21,6 +21,7 @@ import TradePerformance from './components/TradePerformance';
 import OIDivergence from './components/OIDivergence';
 import WhaleFlows from './components/WhaleFlows';
 import ClientIP from './components/ClientIP';
+import Link from 'next/link';
 
 export default function Dashboard() {
   const {
@@ -63,9 +64,11 @@ export default function Dashboard() {
   const {
     isEnabled,
     setIsEnabled,
-    isPaperTrade,
-    setIsPaperTrade,
     tradeLogs,
+    activePosition,
+    isPositionLoaded,
+    isClosingPosition,
+    closeActivePosition,
   } = useAutonomousTrading({ signal });
 
   return (
@@ -81,6 +84,24 @@ export default function Dashboard() {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center' }}>
+          <Link href="/wallet" style={{
+            marginRight: '16px',
+            color: 'var(--blue)',
+            textDecoration: 'none',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '13px',
+            fontWeight: 600,
+            border: '1px solid var(--blue-dim)',
+            padding: '6px 12px',
+            borderRadius: 'var(--radius-sm)',
+            background: 'rgba(0, 191, 255, 0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            transition: 'all var(--transition-fast)'
+          }}>
+            💼 Wallet
+          </Link>
           <div className="connection-status">
             <span
               className={`status-dot ${wsStatus['binance-liq'] || wsStatus['bybit-liq'] || wsStatus['okx-liq'] ? 'connected' : ''}`}
@@ -116,9 +137,11 @@ export default function Dashboard() {
           <AutoTraderControl 
             isEnabled={isEnabled}
             setIsEnabled={setIsEnabled}
-            isPaperTrade={isPaperTrade}
-            setIsPaperTrade={setIsPaperTrade}
             tradeLogs={tradeLogs}
+            activePosition={activePosition}
+            isPositionLoaded={isPositionLoaded}
+            isClosingPosition={isClosingPosition}
+            closeActivePosition={closeActivePosition}
           />
         </div>
         <OnChainAnalytics

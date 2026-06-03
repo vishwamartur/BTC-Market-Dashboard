@@ -9,10 +9,14 @@ const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 const BTCUSDT_PRODUCT_ID = 27;
 const LEVERAGE = 50;
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, size = 1, limitPrice, isPaperTrade = false, reason, spreadPct } = body;
+    const { action, size = 1, limitPrice, reason, spreadPct } = body;
 
     if (!['BUY_DELTA', 'SELL_DELTA', 'CLOSE_LONG', 'CLOSE_SHORT'].includes(action)) {
       return NextResponse.json({ error: 'Invalid arbitrage action' }, { status: 400 });
@@ -27,30 +31,10 @@ export async function POST(request: Request) {
       side,
       size,
       price: limitPrice,
-      isPaperTrade,
       reason,
       spreadPct,
       status: 'PENDING'
     };
-
-    if (isPaperTrade) {
-      console.log(`[ARB PAPER] ${action} ${size} contracts at ${limitPrice} (Spread: ${spreadPct}%)`);
-      const paperResult = {
-        success: true,
-        isPaperTrade: true,
-        result: {
-          id: `arb_${Math.floor(Math.random() * 1000000)}`,
-          product_id: BTCUSDT_PRODUCT_ID,
-          size,
-          side,
-          state: 'paper_filled',
-          limit_price: limitPrice
-        }
-      };
-
-      insertOneAsync('trades', { ...tradeRecord, status: 'SUCCESS', orderId: paperResult.result.id });
-      return NextResponse.json(paperResult);
-    }
 
     if (!DELTA_API_KEY || !DELTA_API_SECRET) {
       return NextResponse.json({ error: 'Delta API credentials not configured' }, { status: 500 });
@@ -78,7 +62,8 @@ export async function POST(request: Request) {
       size,
       side,
       'limit',
-      limitPrice.toString()
+      limitPrice.toString(),
+      { reduceOnly: action === 'CLOSE_LONG' || action === 'CLOSE_SHORT' }
     );
 
     if (result.success) {
@@ -90,8 +75,8 @@ export async function POST(request: Request) {
       return NextResponse.json(result, { status: 400 });
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Arbitrage execution error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
   }
 }

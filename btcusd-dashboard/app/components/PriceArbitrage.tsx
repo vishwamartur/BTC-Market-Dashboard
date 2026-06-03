@@ -7,8 +7,6 @@ export default function PriceArbitrage() {
   const {
     isEnabled,
     setIsEnabled,
-    isPaperTrade,
-    setIsPaperTrade,
     prices,
     latencies,
     spreadPct,

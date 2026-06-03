@@ -1,11 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   shouldEnterTrade, 
   shouldExitTrade, 
-  DEFAULT_ARB_CONFIG,
-  type ArbAction 
+  DEFAULT_ARB_CONFIG
 } from '../lib/priceArbitrage';
 
 export interface ArbPosition {
@@ -27,7 +26,31 @@ export interface ArbLog {
 
 export function usePriceArbitrage() {
   const [isEnabled, setIsEnabled] = useState(false);
-  const [isPaperTrade, setIsPaperTrade] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    let savedEnabled: boolean | null = null;
+    try {
+      const rawEnabled = localStorage.getItem('arbTrader_isEnabled');
+      if (rawEnabled !== null) {
+        const parsed = JSON.parse(rawEnabled);
+        if (typeof parsed === 'boolean') savedEnabled = parsed;
+      }
+    } catch (e) {
+      console.error('Error reading localStorage', e);
+    }
+
+    queueMicrotask(() => {
+      if (savedEnabled !== null) setIsEnabled(savedEnabled);
+      setIsLoaded(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem('arbTrader_isEnabled', JSON.stringify(isEnabled));
+    }
+  }, [isEnabled, isLoaded]);
   
   const [prices, setPrices] = useState<{
     binance: number|null; 
@@ -50,6 +73,62 @@ export function usePriceArbitrage() {
   
   const isExecutingRef = useRef(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const executeTrade = useCallback(async (action: string, limitPrice: number, reason: string, currentSpread: number, exitingPos?: ArbPosition) => {
+    isExecutingRef.current = true;
+    
+    const size = DEFAULT_ARB_CONFIG.tradeSize;
+    
+    try {
+      const res = await fetch('/api/arbitrage/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          size,
+          limitPrice,
+          reason,
+          spreadPct: currentSpread
+        })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        // Success
+        const logEntry: ArbLog = {
+          id: Math.random().toString(36).substr(2, 9),
+          time: new Date(),
+          action,
+          spread: currentSpread,
+          price: limitPrice
+        };
+
+        if (action === 'BUY_DELTA' || action === 'SELL_DELTA') {
+          setPosition({
+            side: action as 'BUY_DELTA' | 'SELL_DELTA',
+            entryPrice: limitPrice,
+            entrySpread: currentSpread,
+            entryTime: Date.now(),
+            size
+          });
+        } else if (exitingPos) {
+           // Calculate PNL
+           const diff = action === 'CLOSE_LONG' 
+             ? limitPrice - exitingPos.entryPrice 
+             : exitingPos.entryPrice - limitPrice;
+           logEntry.pnl = diff * size;
+           setPosition(null);
+        }
+
+        setLogs(prev => [logEntry, ...prev].slice(0, 50));
+      }
+    } catch (e) {
+      console.error('Arb execution error', e);
+    } finally {
+      isExecutingRef.current = false;
+    }
+  }, []);
 
   // Poll prices rapidly
   useEffect(() => {
@@ -102,7 +181,7 @@ export function usePriceArbitrage() {
           executeTrade(entryCheck.action, entryPrice || data.prices.delta, 'DEVIATION_DETECTED', entryCheck.spread);
         }
 
-      } catch (err) {
+      } catch {
         // Silent catch for frequent polling
       }
     };
@@ -119,71 +198,11 @@ export function usePriceArbitrage() {
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [isEnabled, position, isPaperTrade]);
-
-
-  const executeTrade = async (action: string, limitPrice: number, reason: string, currentSpread: number, exitingPos?: ArbPosition) => {
-    isExecutingRef.current = true;
-    
-    const size = DEFAULT_ARB_CONFIG.tradeSize;
-    
-    try {
-      const res = await fetch('/api/arbitrage/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          size,
-          limitPrice,
-          isPaperTrade,
-          reason,
-          spreadPct: currentSpread
-        })
-      });
-      
-      const data = await res.json();
-      
-      if (res.ok && data.success) {
-        // Success
-        const logEntry: ArbLog = {
-          id: Math.random().toString(36).substr(2, 9),
-          time: new Date(),
-          action,
-          spread: currentSpread,
-          price: limitPrice
-        };
-
-        if (action === 'BUY_DELTA' || action === 'SELL_DELTA') {
-          setPosition({
-            side: action as 'BUY_DELTA' | 'SELL_DELTA',
-            entryPrice: limitPrice,
-            entrySpread: currentSpread,
-            entryTime: Date.now(),
-            size
-          });
-        } else if (exitingPos) {
-           // Calculate PNL
-           const diff = action === 'CLOSE_LONG' 
-             ? limitPrice - exitingPos.entryPrice 
-             : exitingPos.entryPrice - limitPrice;
-           logEntry.pnl = diff * size;
-           setPosition(null);
-        }
-
-        setLogs(prev => [logEntry, ...prev].slice(0, 50));
-      }
-    } catch (e) {
-      console.error('Arb execution error', e);
-    } finally {
-      isExecutingRef.current = false;
-    }
-  };
+  }, [isEnabled, position, executeTrade]);
 
   return {
     isEnabled,
     setIsEnabled,
-    isPaperTrade,
-    setIsPaperTrade,
     prices,
     latencies,
     spreadPct,
