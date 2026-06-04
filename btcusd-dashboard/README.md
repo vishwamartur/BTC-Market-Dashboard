@@ -1,89 +1,105 @@
+<div align="center">
+
 # 🚀 BTC Market & Liquidation Dashboard
+**Real-Time Analytics • On-Chain Data • Autonomous Algorithmic Trading**
 
-A state-of-the-art, real-time Bitcoin market dashboard and autonomous trading bot built with Next.js 14/15 App Router. 
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://reactjs.org/)
+[![Delta Exchange](https://img.shields.io/badge/Delta_Exchange-API-blueviolet?style=for-the-badge)](https://www.delta.exchange/)
 
-This application aggregates massive streams of live data across multiple cryptocurrency exchanges, processes on-chain blockchain metrics, generates an algorithmic trading signal, and executes automated trades using a highly polished, premium glassmorphism UI.
+*A state-of-the-art, high-frequency dashboard engineered to monitor massive crypto liquidations and automatically execute algorithmic trades using a premium glassmorphism UI.*
 
----
+<br/>
 
-## ✨ Features
-
-### 1. ⚡ Live Liquidation Engine
-- **Multi-Exchange Websockets**: Connects simultaneously to Binance, Bybit, and OKX WebSocket feeds.
-- **Real-Time Feed**: Instantly displays massive liquidations the millisecond they occur.
-- **Aggregated Analytics**: Tracks total USD liquidations by side (Long vs Short) and isolates the largest rekt positions.
-- **Whale Tracker**: Flags and visually emphasizes massive liquidation events > $100,000 USD.
-
-### 2. 📊 On-Chain & Market Data
-- **Global Long/Short Ratio**: Fetched from Binance Futures to gauge overall market bias.
-- **Open Interest**: Live tracking of open Bitcoin contracts.
-- **Mempool & Hashrate**: Integrates with `Mempool.space` and `Blockchain.info` APIs to track Bitcoin network congestion, fastest transaction fees, block heights, and network hashrate.
-- **Whale Transactions**: Real-time alerts for unconfirmed large BTC movements across the blockchain.
-
-### 3. 🤖 Algorithmic Signal Engine
-- Uses a multi-factor weighting system to generate a `STRONG SELL`, `SELL`, `NEUTRAL`, `BUY`, or `STRONG BUY` signal.
-- **Scoring Components**:
-  - *Liquidation Pressure*: Analyzes immediate long/short squeeze imbalances.
-  - *Long/Short Bias*: Evaluates top trader positioning vs retail positioning.
-  - *On-Chain Activity*: Looks at network congestion and whale activity to predict volatility.
-- **Visual Gauge**: Premium animated progress bar showing the live algorithm score.
-
-### 4. ⚙️ Autonomous Trading Integration
-- **Delta Exchange Integration**: Uses secure server-side Node.js native `crypto` HMAC-SHA256 request signing.
-- **Auto-Trader UI**: Toggle the bot on or off directly from the dashboard.
-- **Paper Trading vs Live**: Toggle simulation mode to test the engine safely, or switch to Live mode to execute real trades on Delta Exchange.
-- **Safety Limits**: Default configuration executes minimum allowable contract sizes (1 contract) with a built-in 5-minute cooldown between trades.
-
-### 5. 💎 Premium UI/UX Design
-- **True Glassmorphism**: Cards feature deep blur overlays `backdrop-filter: blur(24px) saturate(150%)` simulating physical translucent glass over the background.
-- **Ambient Mesh Background**: A beautiful, slow-moving particle/mesh gradient floating in the background.
-- **Dynamic Glows**: Vibrant neon color palette with drop-shadow glows to emphasize critical data.
-- **Micro-Animations**: Cards elevate on hover, liquidations smoothly slide in, and connection badges organically pulse.
+</div>
 
 ---
 
-## 🛠️ Tech Stack
+## ✨ Features at a Glance
 
-- **Framework**: [Next.js](https://nextjs.org) (App Router)
-- **Language**: TypeScript
-- **Styling**: Pure CSS (`globals.css`) with CSS Variables & advanced animations
-- **Data Fetching**: Native `fetch` with Next.js caching + Native Node.js `ws` (WebSockets)
-- **Cryptography**: Node's built-in `crypto` for API signatures
+<div align="center">
+
+| ⚡ Live Liquidations | 📊 Market Data | 🤖 Trading Engine |
+| :---: | :---: | :---: |
+| **Multi-Exchange**<br/>Binance, Bybit, OKX WebSockets | **On-Chain Tracking**<br/>Mempool & Blockchain.info | **Algorithmic Signal**<br/>Multi-factor logic (Buy/Sell) |
+| **Whale Tracker**<br/>Visual alerts for >$100k liquidations | **Global Ratios**<br/>Live Long/Short & Open Interest | **Auto-Trader Integration**<br/>Direct Delta Exchange execution |
+| **Aggregated Charts**<br/>Running USD totals by side | **Whale Movements**<br/>Live unconfirmed large TXs | **Safety Limits**<br/>Paper trading & cooldowns |
+
+</div>
+
+---
+
+## 💎 Premium Aesthetics
+
+This dashboard doesn't just display data—it provides an **experience**.
+- **True Glassmorphism:** Cards feature deep blur overlays (`backdrop-filter`) simulating physical translucent glass.
+- **Ambient Mesh Background:** A slow-moving particle/mesh gradient floating in the background makes the UI feel alive.
+- **Dynamic Glows:** Highly saturated neon palettes with drop-shadow glows emulate a physical LED trading terminal.
+- **Micro-Animations:** Fluid hover states, smooth row sliding, and organic pulsing indicators for live data streams.
+
+---
+
+## 🏗️ Architecture & Tech Stack
+
+```mermaid
+graph TD;
+    A[Next.js App Router] --> B[Client Components];
+    A --> C[Server API Routes];
+    B -->|WebSocket| D(Binance / Bybit / OKX);
+    C -->|REST API| E(Delta Exchange API);
+    C -->|HMAC-SHA256| F[Crypto Auth];
+    B -->|Polling| G(Mempool.space / Blockchain.info);
+```
+
+### Powered By:
+* **Framework**: React / Next.js (App Router)
+* **Styling**: Pure CSS (`globals.css`) with advanced CSS Variables & Transitions
+* **Data Sources**: Native WebSockets + Native `fetch` with caching
+* **Security**: Native Node.js `crypto` for securely signing API requests
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Prerequisites
-Ensure you have Node.js 18.17+ installed.
+Follow these steps to run the dashboard locally.
 
-### 2. Environment Variables
-If you intend to use the Live Auto-Trader, you must securely provide your Delta Exchange API credentials. While currently hardcoded safely for immediate local testing, you should move them to a `.env.local` file:
+### 1. Prerequisites
+Ensure you have **Node.js 18.17+** installed.
+
+### 2. Environment Variables (For Live Trading)
+If you intend to use the Live Auto-Trader, securely provide your Delta Exchange API credentials. Create a `.env.local` file in the root directory:
+
 ```env
 DELTA_API_KEY=your_api_key_here
 DELTA_API_SECRET=your_api_secret_here
 ```
+> **Note:** The UI defaults to **PAPER TRADING** mode to ensure your funds are safe during testing.
 
 ### 3. Installation
+Clone the repository and install the dependencies:
 ```bash
 npm install
-# or
-yarn install
-# or
-pnpm install
 ```
 
-### 4. Start the Development Server
+### 4. Start the Engine
+Fire up the development server:
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
 ```
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result. The websockets will connect automatically.
+Open [http://localhost:3000](http://localhost:3000) in your browser. The WebSockets will instantly connect and data will begin flowing!
 
 ---
 
-## ⚠️ Disclaimer
-**This software is for educational purposes only.** The autonomous trading functionality executes real financial trades. Use the "LIVE TRADING" feature entirely at your own risk. The creators assume no liability for financial losses incurred. Always use "PAPER TRADING" to test algorithms.
+<details>
+<summary><b>⚠️ Risk Disclaimer (Click to expand)</b></summary>
+<br/>
+
+**This software is for educational purposes only.** 
+The autonomous trading functionality executes real financial trades when toggled to "LIVE TRADING". Use this feature entirely at your own risk. The creators assume absolutely no liability for financial losses incurred. Always use "PAPER TRADING" to safely backtest or monitor the algorithms before deploying real capital.
+</details>
+
+<div align="center">
+  <br/>
+  <p><i>Built with precision for the modern crypto trader.</i></p>
+</div>
