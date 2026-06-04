@@ -17,20 +17,76 @@ const LEVERAGE = 50;
 const DEFAULT_TRADE_SIZE = 15;
 const MAX_TRADE_SIZE = 50; // Hard cap regardless of client request
 
+// ---------------------------------------------------------------------------
+// Rate limiter (1 trade per 5 seconds)
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT_MS = 5000;
+let lastTradeTimestamp = 0;
+
+// ---------------------------------------------------------------------------
+// Idempotency cache (60-second window)
+// ---------------------------------------------------------------------------
+
+const IDEMPOTENCY_TTL_MS = 60_000;
+const idempotencyCache = new Map<string, { response: unknown; status: number; expiresAt: number }>();
+
+function cleanIdempotencyCache() {
+  const now = Date.now();
+  for (const [key, entry] of idempotencyCache) {
+    if (now > entry.expiresAt) idempotencyCache.delete(key);
+  }
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function cacheAndRespond(requestId: string | undefined, responseData: unknown, status: number) {
+  if (requestId && typeof requestId === 'string') {
+    idempotencyCache.set(requestId, {
+      response: responseData,
+      status,
+      expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
+    });
+  }
+  return NextResponse.json(responseData, { status });
 }
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { action, size: rawSize = DEFAULT_TRADE_SIZE, reason } = body;
+    const { action, size: rawSize = DEFAULT_TRADE_SIZE, reason, requestId } = body;
 
     if (!['BUY', 'SELL', 'CLOSE_POSITION'].includes(action)) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
 
+    // Idempotency check
+    if (requestId && typeof requestId === 'string') {
+      cleanIdempotencyCache();
+      const cached = idempotencyCache.get(requestId);
+      if (cached) {
+        console.log(`[TRADE] Idempotent replay for requestId=${requestId}`);
+        return NextResponse.json(cached.response, { status: cached.status });
+      }
+    }
+
+    // Rate limit check
+    const now = Date.now();
+    if (now - lastTradeTimestamp < RATE_LIMIT_MS) {
+      const retryAfterMs = RATE_LIMIT_MS - (now - lastTradeTimestamp);
+      return NextResponse.json(
+        { error: `Rate limited. Retry after ${Math.ceil(retryAfterMs / 1000)}s.` },
+        { status: 429 }
+      );
+    }
+    lastTradeTimestamp = now;
+
+    console.log(`[TRADE] ${action} size=${rawSize} reason=${reason || 'none'} requestId=${requestId || 'none'}`);
+
     // Live trading — verify credentials exist
+
     if (!DELTA_API_KEY || !DELTA_API_SECRET) {
       console.error('[REAL TRADE] Missing DELTA_API_KEY or DELTA_API_SECRET in env');
       return NextResponse.json({ error: 'Delta API credentials not configured' }, { status: 500 });
@@ -85,11 +141,11 @@ export async function POST(request: Request) {
           rawResult: result.result,
         });
 
-        return NextResponse.json({
+        return cacheAndRespond(requestId, {
           ...result,
           closed: true,
           position: activePosition,
-        });
+        }, 200);
       }
 
       insertOneAsync('trades', {
@@ -105,7 +161,7 @@ export async function POST(request: Request) {
         closedPosition: activePosition,
       });
 
-      return NextResponse.json(result, { status: 400 });
+      return cacheAndRespond(requestId, result, 400);
     }
 
     if (activePosition) {
@@ -126,7 +182,8 @@ export async function POST(request: Request) {
 
     // 1. Set Leverage
     const levResult = await setDeltaLeverage(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID, LEVERAGE);
-    if (!levResult.success && levResult.error?.code !== 'leverage_not_changed') {
+    const levError = levResult.error as Record<string, unknown> | undefined;
+    if (!levResult.success && levError?.code !== 'leverage_not_changed') {
       console.log('[REAL TRADE] Failed to set leverage:', levResult.error);
       // We log it but don't strictly fail the trade if leverage couldn't be adjusted 
       // (sometimes it throws leverage_not_changed which is fine)
@@ -179,7 +236,7 @@ export async function POST(request: Request) {
         rawResult: result.result,
       });
 
-      return NextResponse.json(result);
+      return cacheAndRespond(requestId, result, 200);
     } else {
       console.error('[REAL TRADE] Failed:', result.error);
 
@@ -194,7 +251,7 @@ export async function POST(request: Request) {
         productId: BTCUSDT_PRODUCT_ID,
       });
 
-      return NextResponse.json(result, { status: 400 });
+      return cacheAndRespond(requestId, result, 400);
     }
 
   } catch (error: unknown) {

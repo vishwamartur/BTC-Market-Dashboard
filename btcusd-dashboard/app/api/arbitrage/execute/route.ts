@@ -35,7 +35,7 @@ async function waitForFillOrCancel(orderId: number): Promise<{
     const orderResult = await getOrderById(DELTA_API_KEY, DELTA_API_SECRET, orderId);
     if (!orderResult.success || !orderResult.result) continue;
 
-    const order = orderResult.result;
+    const order = orderResult.result as Record<string, unknown>;
     const state = String(order.state || '');
 
     // Fully filled
@@ -64,13 +64,14 @@ async function waitForFillOrCancel(orderId: number): Promise<{
     // If cancel fails, the order might have filled in the meantime — re-check
     const recheckResult = await getOrderById(DELTA_API_KEY, DELTA_API_SECRET, orderId);
     if (recheckResult.success && recheckResult.result) {
-      const finalState = String(recheckResult.result.state || '');
+      const recheckOrder = recheckResult.result as Record<string, unknown>;
+      const finalState = String(recheckOrder.state || '');
       if (finalState === 'closed' || finalState === 'filled') {
         return {
           filled: true,
           state: finalState,
-          filledSize: Number(recheckResult.result.size || 0),
-          avgFillPrice: Number(recheckResult.result.average_fill_price || recheckResult.result.limit_price || 0),
+          filledSize: Number(recheckOrder.size || 0),
+          avgFillPrice: Number(recheckOrder.average_fill_price || recheckOrder.limit_price || 0),
         };
       }
     }
@@ -115,7 +116,8 @@ export async function POST(request: Request) {
 
     // 1. Set Leverage (ignore 'leverage_not_changed' errors)
     const levResult = await setDeltaLeverage(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID, LEVERAGE);
-    if (!levResult.success && levResult.error?.code !== 'leverage_not_changed') {
+    const levError = levResult.error as Record<string, unknown> | undefined;
+    if (!levResult.success && levError?.code !== 'leverage_not_changed') {
       console.log('[ARB REAL] Failed to set leverage:', levResult.error);
     }
 

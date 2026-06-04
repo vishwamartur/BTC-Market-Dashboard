@@ -9,19 +9,39 @@ const DELTA_API_KEY = process.env.DELTA_API_KEY || '';
 const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 const BTCUSDT_PRODUCT_ID = 27;
 
+// ---------------------------------------------------------------------------
+// In-memory position cache (5-second TTL)
+// ---------------------------------------------------------------------------
+
+const CACHE_TTL_MS = 5000;
+let cachedResult: { data: unknown; fetchedAt: number } | null = null;
+
 export async function GET() {
   if (!DELTA_API_KEY || !DELTA_API_SECRET) {
     return NextResponse.json({ error: 'Delta API credentials not configured' }, { status: 500 });
   }
 
-  const result = await getDeltaPositions(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID);
-  if (!result.success) {
-    return NextResponse.json({ error: result.error || 'Failed to fetch Delta position' }, { status: 502 });
+  // Return cached response if fresh
+  if (cachedResult && Date.now() - cachedResult.fetchedAt < CACHE_TTL_MS) {
+    return NextResponse.json(cachedResult.data);
   }
 
-  return NextResponse.json({
+  const result = await getDeltaPositions(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID);
+  if (!result.success) {
+    console.error('[/api/position] getDeltaPositions failed:', JSON.stringify(result));
+    return NextResponse.json(
+      { error: result.error || 'Failed to fetch Delta position', detail: result },
+      { status: 502 }
+    );
+  }
+
+  const responseData = {
     success: true,
     position: normalizeDeltaPosition(result.result, BTCUSDT_PRODUCT_ID),
     timestamp: Date.now(),
-  });
+  };
+
+  cachedResult = { data: responseData, fetchedAt: Date.now() };
+
+  return NextResponse.json(responseData);
 }

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { resilientFetch } from './resilientFetch';
 
 export const DELTA_BASE_URL = process.env.DELTA_BASE_URL || 'https://api.delta.exchange';
 
@@ -39,6 +40,75 @@ export function generateSignature(method: string, path: string, payload: string,
   return crypto.createHmac('sha256', apiSecret).update(signatureData).digest('hex');
 }
 
+// ---------------------------------------------------------------------------
+// Shared helper: authenticated Delta request with resilientFetch
+// ---------------------------------------------------------------------------
+
+interface DeltaRequestOptions {
+  method: string;
+  path: string;
+  apiKey: string;
+  apiSecret: string;
+  payload?: string;
+  label?: string;
+  /** Retry count (default: 2 for reads, 0 for writes). */
+  retries?: number;
+}
+
+async function deltaRequest<T = Record<string, unknown>>(opts: DeltaRequestOptions): Promise<T & { success: boolean; error?: unknown }> {
+  const { method, path, apiKey, apiSecret, payload = '', label = 'deltaRequest', retries = 2 } = opts;
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+  const url = `${DELTA_BASE_URL}${path}`;
+
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    'api-key': apiKey,
+    'timestamp': timestamp,
+    'signature': signature,
+  };
+
+  if (payload) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  try {
+    const response = await resilientFetch(url, {
+      retries,
+      timeoutMs: 10_000,
+      init: {
+        method,
+        headers,
+        ...(payload ? { body: payload } : {}),
+      },
+    });
+
+    const rawText = await response.text();
+
+    let data: T & { success: boolean; error?: unknown };
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      console.error(`[${label}] Non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 200)}`);
+      return { success: false, error: `Non-JSON response (HTTP ${response.status}): ${rawText.slice(0, 200)}` } as T & { success: boolean; error?: unknown };
+    }
+
+    if (!data.success) {
+      console.error(`[${label}] API returned success=false | error: ${JSON.stringify(data.error)}`);
+    }
+
+    return data;
+  } catch (error: unknown) {
+    console.error(`[${label}] Network error:`, error);
+    return { success: false, error: getErrorMessage(error) } as T & { success: boolean; error?: unknown };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public API functions
+// ---------------------------------------------------------------------------
+
 export async function placeDeltaOrder(
   apiKey: string,
   apiSecret: string,
@@ -49,82 +119,38 @@ export async function placeDeltaOrder(
   limitPrice?: string,
   options: PlaceOrderOptions = {}
 ): Promise<DeltaOrderResponse> {
-  const method = 'POST';
-  const path = '/v2/orders';
   const payloadObj: Record<string, unknown> = {
     product_id: productId,
     size: size,
     side: side,
     order_type: orderType === 'market' ? 'market_order' : 'limit_order',
   };
-  if (limitPrice) {
-    payloadObj.limit_price = limitPrice;
-  }
-  if (options.reduceOnly !== undefined) {
-    payloadObj.reduce_only = options.reduceOnly;
-  }
-  if (options.cancelOrdersAccepted !== undefined) {
-    payloadObj.cancel_orders_accepted = options.cancelOrdersAccepted;
-  }
-  if (options.clientOrderId) {
-    payloadObj.client_order_id = options.clientOrderId;
-  }
-  const payload = JSON.stringify(payloadObj);
+  if (limitPrice) payloadObj.limit_price = limitPrice;
+  if (options.reduceOnly !== undefined) payloadObj.reduce_only = options.reduceOnly;
+  if (options.cancelOrdersAccepted !== undefined) payloadObj.cancel_orders_accepted = options.cancelOrdersAccepted;
+  if (options.clientOrderId) payloadObj.client_order_id = options.clientOrderId;
 
-  // Delta Exchange expects timestamp in SECONDS, not milliseconds
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
-
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-      body: payload,
-    });
-
-    const data = await response.json();
-    return data as DeltaOrderResponse;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error:', error);
-    return {
-      success: false,
-      error: { code: 'network_error', context: getErrorMessage(error) },
-    };
-  }
+  return deltaRequest<DeltaOrderResponse>({
+    method: 'POST',
+    path: '/v2/orders',
+    apiKey,
+    apiSecret,
+    payload: JSON.stringify(payloadObj),
+    label: 'placeDeltaOrder',
+    retries: 0, // No retries for order placement — avoids double-fills
+  });
 }
 
 export async function getDeltaPositions(apiKey: string, apiSecret: string, productId?: number): Promise<DeltaPositionResponse> {
-  const method = 'GET';
   const path = productId ? `/v2/positions?product_id=${productId}` : '/v2/positions';
-  const payload = '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
-
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error:', error);
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest<DeltaPositionResponse>({
+    method: 'GET',
+    path,
+    apiKey,
+    apiSecret,
+    label: 'getDeltaPositions',
+    retries: 2,
+  });
 }
 
 export async function setDeltaLeverage(
@@ -133,182 +159,75 @@ export async function setDeltaLeverage(
   productId: number,
   leverage: number
 ) {
-  const method = 'POST';
-  const path = `/v2/products/${productId}/orders/leverage`;
-  const payload = JSON.stringify({ leverage: leverage.toString() });
-
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
-
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-      body: payload
-    });
-
-    const data = await response.json();
-    if (data.success) {
-      return { success: true, result: data.result };
-    }
-    return { success: false, error: data.error };
-  } catch (error: unknown) {
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest({
+    method: 'POST',
+    path: `/v2/products/${productId}/orders/leverage`,
+    apiKey,
+    apiSecret,
+    payload: JSON.stringify({ leverage: leverage.toString() }),
+    label: 'setDeltaLeverage',
+    retries: 1,
+  });
 }
 
 export async function getDeltaFills(apiKey: string, apiSecret: string, productId?: number, limit: number = 100) {
-  const method = 'GET';
   let path = `/v2/fills?limit=${limit}`;
-  if (productId) {
-    path += `&product_id=${productId}`;
-  }
-  const payload = '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+  if (productId) path += `&product_id=${productId}`;
 
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error (Fills):', error);
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest({
+    method: 'GET',
+    path,
+    apiKey,
+    apiSecret,
+    label: 'getDeltaFills',
+    retries: 2,
+  });
 }
 
 export async function getDeltaWalletBalances(apiKey: string, apiSecret: string) {
-  const method = 'GET';
-  const path = '/v2/wallet/balances';
-  const payload = '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
-
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-      cache: 'no-store',
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error (Wallet):', error);
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest({
+    method: 'GET',
+    path: '/v2/wallet/balances',
+    apiKey,
+    apiSecret,
+    label: 'getDeltaWalletBalances',
+    retries: 2,
+  });
 }
 
 export async function getOrderById(apiKey: string, apiSecret: string, orderId: number) {
-  const method = 'GET';
-  const path = `/v2/orders/${orderId}`;
-  const payload = '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
-
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error (GetOrder):', error);
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest({
+    method: 'GET',
+    path: `/v2/orders/${orderId}`,
+    apiKey,
+    apiSecret,
+    label: 'getOrderById',
+    retries: 2,
+  });
 }
 
 export async function cancelOrder(apiKey: string, apiSecret: string, orderId: number, productId: number) {
-  const method = 'DELETE';
-  const path = '/v2/orders';
-  const payloadObj = {
-    id: orderId,
-    product_id: productId,
-  };
-  const payload = JSON.stringify(payloadObj);
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
-
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-      body: payload,
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error (Cancel):', error);
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest({
+    method: 'DELETE',
+    path: '/v2/orders',
+    apiKey,
+    apiSecret,
+    payload: JSON.stringify({ id: orderId, product_id: productId }),
+    label: 'cancelOrder',
+    retries: 0, // No retries for cancel — avoid double-cancel confusion
+  });
 }
 
 export async function getOpenOrders(apiKey: string, apiSecret: string, productId?: number) {
-  const method = 'GET';
   let path = '/v2/orders?state=open';
-  if (productId) {
-    path += `&product_id=${productId}`;
-  }
-  const payload = '';
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const signature = generateSignature(method, path, payload, apiSecret, timestamp);
+  if (productId) path += `&product_id=${productId}`;
 
-  try {
-    const response = await fetch(`${DELTA_BASE_URL}${path}`, {
-      method: method,
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'api-key': apiKey,
-        'timestamp': timestamp,
-        'signature': signature,
-      },
-    });
-
-    const data = await response.json();
-    return data;
-  } catch (error: unknown) {
-    console.error('Delta Exchange API Error (OpenOrders):', error);
-    return { success: false, error: getErrorMessage(error) };
-  }
+  return deltaRequest({
+    method: 'GET',
+    path,
+    apiKey,
+    apiSecret,
+    label: 'getOpenOrders',
+    retries: 2,
+  });
 }
-
