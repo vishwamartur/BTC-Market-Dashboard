@@ -195,6 +195,7 @@ export function useLiquidationData() {
               [msg.stream]: msg.connected
             }));
           } else if (msg.type === 'price') {
+            setWsStatus(s => s.price ? s : { ...s, price: true });
             const raw = msg.data;
             if (raw.p) {
               const newPrice = parseFloat(raw.p);
@@ -210,6 +211,9 @@ export function useLiquidationData() {
             }
           } else if (msg.type === 'liquidation') {
             const source = msg.source;
+            if (source) {
+              setWsStatus(s => s[`${source}-liq`] ? s : { ...s, [`${source}-liq`]: true });
+            }
             const raw = msg.data;
             let liqEvents: LiquidationEvent[] = [];
 

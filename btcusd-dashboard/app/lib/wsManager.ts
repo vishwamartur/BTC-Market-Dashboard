@@ -58,6 +58,14 @@ class WsManager {
   subscribe(fn: StreamSubscriber): () => void {
     this.subscribers.add(fn);
     this.ensureStarted();
+
+    // Immediately send current connection states to the new subscriber
+    for (const [name, ws] of this.sockets.entries()) {
+      if (ws.readyState === WebSocket.OPEN) {
+        fn({ type: 'status', stream: name, connected: true });
+      }
+    }
+
     return () => {
       this.subscribers.delete(fn);
     };
