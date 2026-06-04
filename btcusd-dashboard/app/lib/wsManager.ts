@@ -218,6 +218,7 @@ class WsManager {
 
   private connectBybit() {
     const name = 'bybit-liq';
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
       const ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
@@ -227,6 +228,13 @@ class WsManager {
         this.resetReconnect(name);
         this.broadcast({ type: 'status', stream: name, connected: true });
         ws.send(JSON.stringify({ op: 'subscribe', args: ['allLiquidation.BTCUSDT'] }));
+        
+        // Keep-alive ping every 20 seconds
+        pingTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ op: 'ping' }));
+          }
+        }, 20000);
       });
 
       ws.on('message', (raw) => {
@@ -243,12 +251,14 @@ class WsManager {
       });
 
       ws.on('close', () => {
+        if (pingTimer) clearInterval(pingTimer);
         this.broadcast({ type: 'status', stream: name, connected: false });
         this.scheduleReconnect(name, () => this.connectBybit());
       });
 
       ws.on('error', () => {});
     } catch {
+      if (pingTimer) clearInterval(pingTimer);
       this.scheduleReconnect(name, () => this.connectBybit());
     }
   }
@@ -259,6 +269,7 @@ class WsManager {
 
   private connectOkx() {
     const name = 'okx-liq';
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
       const ws = new WebSocket('wss://ws.okx.com:8443/ws/v5/public');
@@ -271,6 +282,13 @@ class WsManager {
           op: 'subscribe',
           args: [{ channel: 'liquidation-orders', instType: 'SWAP', instId: 'BTC-USDT-SWAP' }],
         }));
+        
+        // Keep-alive ping every 20 seconds
+        pingTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send('ping');
+          }
+        }, 20000);
       });
 
       ws.on('message', (raw) => {
@@ -289,12 +307,14 @@ class WsManager {
       });
 
       ws.on('close', () => {
+        if (pingTimer) clearInterval(pingTimer);
         this.broadcast({ type: 'status', stream: name, connected: false });
         this.scheduleReconnect(name, () => this.connectOkx());
       });
 
       ws.on('error', () => {});
     } catch {
+      if (pingTimer) clearInterval(pingTimer);
       this.scheduleReconnect(name, () => this.connectOkx());
     }
   }
