@@ -165,8 +165,11 @@ class WsManager {
         this.scheduleReconnect(name, () => this.connectBinanceLiq());
       });
 
-      ws.on('error', () => {}); // swallow — close event handles reconnect
-    } catch {
+      ws.on('error', (err) => {
+        console.error(`[WsManager] ${name} WebSocket error:`, err);
+      }); // swallow — close event handles reconnect
+    } catch (err) {
+      console.error(`[WsManager] ${name} connection exception:`, err);
       this.scheduleReconnect(name, () => this.connectBinanceLiq());
     }
   }
@@ -206,8 +209,11 @@ class WsManager {
         this.scheduleReconnect(name, () => this.connectBinanceTrade());
       });
 
-      ws.on('error', () => {});
-    } catch {
+      ws.on('error', (err) => {
+        console.error(`[WsManager] ${name} WebSocket error:`, err);
+      });
+    } catch (err) {
+      console.error(`[WsManager] ${name} connection exception:`, err);
       this.scheduleReconnect(name, () => this.connectBinanceTrade());
     }
   }
@@ -229,12 +235,12 @@ class WsManager {
         this.broadcast({ type: 'status', stream: name, connected: true });
         ws.send(JSON.stringify({ op: 'subscribe', args: ['allLiquidation.BTCUSDT'] }));
         
-        // Keep-alive ping every 20 seconds
+        // Keep-alive ping every 10 seconds to avoid timeout
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ op: 'ping' }));
+            ws.send(JSON.stringify({ req_id: String(Date.now()), op: 'ping' }));
           }
-        }, 20000);
+        }, 10000);
       });
 
       ws.on('message', (raw) => {
@@ -256,8 +262,11 @@ class WsManager {
         this.scheduleReconnect(name, () => this.connectBybit());
       });
 
-      ws.on('error', () => {});
-    } catch {
+      ws.on('error', (err) => {
+        console.error(`[WsManager] ${name} WebSocket error:`, err);
+      });
+    } catch (err) {
+      console.error(`[WsManager] ${name} connection exception:`, err);
       if (pingTimer) clearInterval(pingTimer);
       this.scheduleReconnect(name, () => this.connectBybit());
     }
@@ -283,12 +292,12 @@ class WsManager {
           args: [{ channel: 'liquidation-orders', instType: 'SWAP', instId: 'BTC-USDT-SWAP' }],
         }));
         
-        // Keep-alive ping every 20 seconds
+        // Keep-alive ping every 10 seconds
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send('ping');
           }
-        }, 20000);
+        }, 10000);
       });
 
       ws.on('message', (raw) => {
@@ -312,8 +321,11 @@ class WsManager {
         this.scheduleReconnect(name, () => this.connectOkx());
       });
 
-      ws.on('error', () => {});
-    } catch {
+      ws.on('error', (err) => {
+        console.error(`[WsManager] ${name} WebSocket error:`, err);
+      });
+    } catch (err) {
+      console.error(`[WsManager] ${name} connection exception:`, err);
       if (pingTimer) clearInterval(pingTimer);
       this.scheduleReconnect(name, () => this.connectOkx());
     }

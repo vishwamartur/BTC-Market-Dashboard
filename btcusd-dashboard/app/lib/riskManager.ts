@@ -55,7 +55,7 @@ export function calculatePositionSize(
   const minContracts = 1;
   const range = 100 - config.minConfidence;
   const normalized = (confidence - config.minConfidence) / range; // 0 to 1
-  
+
   const size = Math.round(minContracts + normalized * (config.maxPositionSize - minContracts));
 
   return Math.min(size, config.maxPositionSize);
@@ -110,7 +110,7 @@ export function calculateExpectedNetValue(
 ): number {
   const p = confidence / 100;
   const roundTripFee = config.takerFeePct * 2;
-  
+
   const eNet = (p * config.estimatedWinPct) - ((1 - p) * config.estimatedLossPct) - roundTripFee;
   return eNet;
 }
