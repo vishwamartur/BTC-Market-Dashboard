@@ -95,9 +95,13 @@ export function usePriceArbitrage() {
   const [latencies, setLatencies] = useState<{binance: number|null, bybit: number|null, delta: number|null}>({binance: null, bybit: null, delta: null});
   const [spreadPct, setSpreadPct] = useState<number>(0);
   
-  // Position state — initialized from localStorage for persistence across refreshes
-  const [position, setPosition] = useState<ArbPosition | null>(() => loadPosition());
+  // Position state — initialized to null for SSR, then loaded from localStorage on client mount
+  const [position, setPosition] = useState<ArbPosition | null>(null);
   const [logs, setLogs] = useState<ArbLog[]>([]);
+
+  useEffect(() => {
+    setPosition(loadPosition());
+  }, []);
   
   const isExecutingRef = useRef(false);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);

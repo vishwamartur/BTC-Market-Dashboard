@@ -10,13 +10,20 @@ export async function GET() {
     const BYBIT_API = 'https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT';
     const DELTA_API = 'https://api.india.delta.exchange/v2/tickers/BTCUSD';
 
-    const timeFetch = async (url: string) => {
+    // Consume the response body inside the fetch helper so the abort signal
+    // cannot kill the body stream between fetch() and .json().
+    const timeFetch = async (url: string): Promise<{ data: unknown; latency: number }> => {
       const start = Date.now();
       try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-        return { res, latency: Date.now() - start };
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) {
+          return { data: null, latency: Date.now() - start };
+        }
+        const data = await res.json();
+        return { data, latency: Date.now() - start };
       } catch (error) {
-        return { res: null, latency: Date.now() - start };
+        console.warn(`[ARB PRICES] Fetch failed for ${url}:`, (error as Error).message);
+        return { data: null, latency: Date.now() - start };
       }
     };
 
@@ -32,20 +39,20 @@ export async function GET() {
     let deltaBid = null;
     let deltaAsk = null;
 
-    if (binanceResult.res && binanceResult.res.ok) {
-      const data = await binanceResult.res.json();
-      binancePrice = parseFloat(data.price);
+    if (binanceResult.data) {
+      const data = binanceResult.data as { price?: string };
+      if (data.price) binancePrice = parseFloat(data.price);
     }
 
-    if (bybitResult.res && bybitResult.res.ok) {
-      const data = await bybitResult.res.json();
+    if (bybitResult.data) {
+      const data = bybitResult.data as { result?: { list?: { lastPrice?: string }[] } };
       if (data.result?.list?.[0]?.lastPrice) {
         bybitPrice = parseFloat(data.result.list[0].lastPrice);
       }
     }
 
-    if (deltaResult.res && deltaResult.res.ok) {
-      const data = await deltaResult.res.json();
+    if (deltaResult.data) {
+      const data = deltaResult.data as { success?: boolean; result?: { mark_price?: string; quotes?: { best_bid?: string; best_ask?: string } } };
       if (data.success && data.result?.mark_price) {
         deltaPrice = parseFloat(data.result.mark_price);
         deltaBid = parseFloat(data.result.quotes?.best_bid || data.result.mark_price);

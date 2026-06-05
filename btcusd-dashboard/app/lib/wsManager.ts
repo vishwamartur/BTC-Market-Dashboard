@@ -256,7 +256,8 @@ class WsManager {
         } catch { /* ignore */ }
       });
 
-      ws.on('close', () => {
+      ws.on('close', (code, reason) => {
+        console.log(`[WsManager] bybit-liq closed. code=${code} reason=${reason}`);
         if (pingTimer) clearInterval(pingTimer);
         this.broadcast({ type: 'status', stream: name, connected: false });
         this.scheduleReconnect(name, () => this.connectBybit());
@@ -315,7 +316,8 @@ class WsManager {
         } catch { /* ignore */ }
       });
 
-      ws.on('close', () => {
+      ws.on('close', (code, reason) => {
+        console.log(`[WsManager] okx-liq closed. code=${code} reason=${reason}`);
         if (pingTimer) clearInterval(pingTimer);
         this.broadcast({ type: 'status', stream: name, connected: false });
         this.scheduleReconnect(name, () => this.connectOkx());
