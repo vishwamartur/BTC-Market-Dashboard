@@ -62,7 +62,16 @@ export const BLOCKCHAIN_API_BASE = 'https://blockchain.info';
 
 export async function fetchUnconfirmedTransactions(): Promise<UnconfirmedTransactionsResponse> {
   const res = await fetch(`${BLOCKCHAIN_API_BASE}/unconfirmed-transactions?format=json`);
-  if (!res.ok) throw new Error('Failed to fetch unconfirmed transactions');
+  if (res.status === 429) {
+    throw new Error('Rate limited by blockchain.info (429)');
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    if (body.toLowerCase().includes('rate')) {
+      throw new Error(`Rate limited by blockchain.info (${res.status})`);
+    }
+    throw new Error(`Failed to fetch unconfirmed transactions (${res.status})`);
+  }
   return res.json();
 }
 
