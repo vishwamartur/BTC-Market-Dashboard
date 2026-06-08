@@ -17,13 +17,19 @@ export function useOnChainData(btcPrice: number) {
 
   const [lastUpdate, setLastUpdate] = useState<number>(0);
 
+  const btcPriceRef = useRef(btcPrice);
+  useEffect(() => {
+    btcPriceRef.current = btcPrice;
+  }, [btcPrice]);
+
   useEffect(() => {
     let active = true;
 
     const fetchOnChain = async () => {
       if (!active) return;
       try {
-        const priceParam = btcPrice > 0 ? `?price=${btcPrice}` : '';
+        const currentPrice = btcPriceRef.current;
+        const priceParam = currentPrice > 0 ? `?price=${currentPrice}` : '';
         const res = await fetch(`/api/onchain${priceParam}`);
         if (!res.ok) return;
         const data = await res.json();
@@ -33,7 +39,7 @@ export function useOnChainData(btcPrice: number) {
         if (data.latestBlocks) setLatestBlocks(data.latestBlocks);
         if (data.hashrateData) setHashrateData(data.hashrateData);
 
-        if (data.unconfirmedTxs && btcPrice > 0) {
+        if (data.unconfirmedTxs && currentPrice > 0) {
           const txs = (data.unconfirmedTxs as UnconfirmedTransactionsResponse).txs;
           const newWhaleTxs: WhaleTransaction[] = [];
 
@@ -41,7 +47,7 @@ export function useOnChainData(btcPrice: number) {
             if (seenWhaleHashes.current.has(tx.hash)) continue;
             seenWhaleHashes.current.add(tx.hash);
 
-            const whaleTx = classifyWhaleTransaction(tx, btcPrice);
+            const whaleTx = classifyWhaleTransaction(tx, currentPrice);
             if (whaleTx) {
               newWhaleTxs.push(whaleTx);
             }
@@ -74,7 +80,7 @@ export function useOnChainData(btcPrice: number) {
       active = false;
       clearInterval(interval);
     };
-  }, [btcPrice]); // re-run if price changes drastically to re-evaluate USD values, though not strictly necessary to reset interval
+  }, []); // Polls every 30s instead of re-running on every btcPrice tick
 
   return {
     mempoolStats,

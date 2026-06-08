@@ -207,6 +207,9 @@ export function usePriceArbitrage() {
         // Order was placed but NOT filled — cancelled automatically
         // Don't update position state — no trade happened
         console.log(`[ARB] Order not filled, cancelled. Reason: ${data.cancelReason}`);
+      } else if (!data.filled && data.cancelReason === 'already_closed') {
+        console.warn('[ARB] Position was already closed on the exchange. Clearing local state.');
+        setPosition(null);
       } else {
         // Handle other failures
         if (data?.error?.code === 'no_position_for_reduce_only') {
@@ -225,6 +228,8 @@ export function usePriceArbitrage() {
 
   // Poll prices and run trading logic
   useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+
     const fetchPrices = async () => {
       try {
         const res = await fetch('/api/arbitrage/prices');
@@ -288,15 +293,15 @@ export function usePriceArbitrage() {
 
     if (isEnabled) {
         fetchPrices(); // immediate fetch
-        pollIntervalRef.current = setInterval(fetchPrices, 2000); // 2s polling (reduced from 1s to lower API load)
+        interval = setInterval(fetchPrices, 2000); // 2s polling
     } else {
         // slower polling just for UI if disabled
         fetchPrices();
-        pollIntervalRef.current = setInterval(fetchPrices, 3000); 
+        interval = setInterval(fetchPrices, 3000); 
     }
 
     return () => {
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (interval) clearInterval(interval);
     };
   }, [isEnabled, position, executeTrade, reconcilePosition]);
 

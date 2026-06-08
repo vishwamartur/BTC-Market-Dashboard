@@ -121,8 +121,8 @@ export async function POST(request: Request) {
       console.log('[ARB REAL] Failed to set leverage:', levResult.error);
     }
 
-    // 2. Place Limit Order
-    console.log(`[ARB REAL] Sending LIMIT order: ${side.toUpperCase()} ${size} @ ${limitPrice}`);
+    // 2. Place Market Order
+    console.log(`[ARB REAL] Sending MARKET order: ${side.toUpperCase()} ${size} (expected ~${limitPrice})`);
 
     const result = await placeDeltaOrder(
       DELTA_API_KEY,
@@ -130,12 +130,25 @@ export async function POST(request: Request) {
       BTCUSDT_PRODUCT_ID,
       size,
       side,
-      'limit',
-      limitPrice.toString(),
+      'market',
+      undefined,
       { reduceOnly: action === 'CLOSE_LONG' || action === 'CLOSE_SHORT' }
     );
 
     if (!result.success) {
+      const errObj = result.error as any;
+      
+      // Handle the case where we try to close a position that is already closed
+      if (errObj?.code === 'no_position_for_reduce_only' || errObj?.message?.includes('no_position_for_reduce_only')) {
+        console.log('[ARB REAL] Position already closed (no_position_for_reduce_only). Treating as success.');
+        insertOneAsync('trades', { ...tradeRecord, status: 'CANCELLED_UNFILLED', cancelReason: 'already_closed' });
+        return NextResponse.json({
+          success: true,
+          filled: false,
+          cancelReason: 'already_closed'
+        }, { status: 200 });
+      }
+
       console.error('[ARB REAL] Order placement failed:', result.error);
       insertOneAsync('trades', { ...tradeRecord, status: 'FAILED', error: result.error });
       return NextResponse.json(result, { status: 400 });
@@ -185,7 +198,7 @@ export async function POST(request: Request) {
         orderId,
         cancelReason: fillResult.state,
         error: { code: 'order_not_filled', context: `Order ${orderId} was not filled within ${FILL_TIMEOUT_MS}ms` },
-      }, { status: 408 });
+      }, { status: 200 });
     }
 
   } catch (error: unknown) {

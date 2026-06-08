@@ -10,7 +10,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export interface StreamMessage {
-  type: 'status' | 'price' | 'liquidation' | 'heartbeat';
+  type: 'status' | 'price' | 'liquidation' | 'heartbeat' | 'ticker';
   stream?: string;
   source?: string;
   connected?: boolean;
@@ -111,6 +111,7 @@ class WsManager {
     // Connect to all exchanges
     this.connectBinanceLiq();
     this.connectBinanceTrade();
+    this.connectBinanceTicker();
     this.connectBybit();
     this.connectOkx();
   }
@@ -219,6 +220,57 @@ class WsManager {
   }
 
   // -----------------------------------------------------------------------
+  // Binance 24h Ticker
+  // -----------------------------------------------------------------------
+
+  private connectBinanceTicker() {
+    const name = 'ticker';
+    const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
+
+    try {
+      const ws = new WebSocket(
+        'wss://fstream.binance.com/ws/btcusdt@ticker',
+        { headers }
+      );
+      this.sockets.set(name, ws);
+
+      ws.on('open', () => {
+        this.resetReconnect(name);
+        this.broadcast({ type: 'status', stream: name, connected: true });
+      });
+
+      ws.on('message', (raw) => {
+        try {
+          const parsed = JSON.parse(raw.toString());
+          if (parsed.e === '24hrTicker') {
+            const mappedTicker = {
+              lastPrice: parsed.c,
+              priceChangePercent: parsed.P,
+              highPrice: parsed.h,
+              lowPrice: parsed.l,
+              volume: parsed.v,
+              quoteVolume: parsed.q,
+            };
+            this.broadcast({ type: 'ticker', data: mappedTicker });
+          }
+        } catch { /* ignore */ }
+      });
+
+      ws.on('close', () => {
+        this.broadcast({ type: 'status', stream: name, connected: false });
+        this.scheduleReconnect(name, () => this.connectBinanceTicker());
+      });
+
+      ws.on('error', (err) => {
+        console.error(`[WsManager] ${name} WebSocket error:`, err);
+      });
+    } catch (err) {
+      console.error(`[WsManager] ${name} connection exception:`, err);
+      this.scheduleReconnect(name, () => this.connectBinanceTicker());
+    }
+  }
+
+  // -----------------------------------------------------------------------
   // Bybit Liquidations
   // -----------------------------------------------------------------------
 
@@ -235,12 +287,12 @@ class WsManager {
         this.broadcast({ type: 'status', stream: name, connected: true });
         ws.send(JSON.stringify({ op: 'subscribe', args: ['allLiquidation.BTCUSDT'] }));
         
-        // Keep-alive ping every 10 seconds to avoid timeout
+        // Keep-alive ping every 20 seconds to avoid timeout (Bybit recommends 20s)
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ req_id: String(Date.now()), op: 'ping' }));
           }
-        }, 10000);
+        }, 20000);
       });
 
       ws.on('message', (raw) => {
@@ -293,12 +345,12 @@ class WsManager {
           args: [{ channel: 'liquidation-orders', instType: 'SWAP', instId: 'BTC-USDT-SWAP' }],
         }));
         
-        // Keep-alive ping every 10 seconds
+        // Keep-alive ping every 20 seconds
         pingTimer = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send('ping');
           }
-        }, 10000);
+        }, 20000);
       });
 
       ws.on('message', (raw) => {

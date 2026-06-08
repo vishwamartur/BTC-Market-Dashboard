@@ -74,13 +74,11 @@ class MarketCache {
     this.fetching = true;
 
     try {
-      const [lsRatioRes, oiRes, ttRatioRes, tickerRes, priceRes, fundingRes] =
+      const [lsRatioRes, oiRes, ttRatioRes, fundingRes] =
         await Promise.allSettled([
           fetch(`${BINANCE_FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1`),
           fetch(`${BINANCE_FAPI}/fapi/v1/openInterest?symbol=BTCUSDT`),
           fetch(`${BINANCE_FAPI}/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1`),
-          fetch(`${BINANCE_FAPI}/fapi/v1/ticker/24hr?symbol=BTCUSDT`),
-          fetch(`${BINANCE_FAPI}/fapi/v1/ticker/price?symbol=BTCUSDT`),
           fetch(`${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`),
         ]);
 
@@ -94,8 +92,6 @@ class MarketCache {
       const longShortRatioRaw = await extract(lsRatioRes);
       const openInterest = await extract(oiRes);
       const topTraderRatioRaw = await extract(ttRatioRes);
-      const ticker = await extract(tickerRes);
-      const priceData = await extract(priceRes);
       const fundingDataRaw = await extract(fundingRes);
 
       const snapshot: MarketSnapshot = {
@@ -108,8 +104,8 @@ class MarketCache {
           Array.isArray(topTraderRatioRaw) && topTraderRatioRaw.length > 0
             ? topTraderRatioRaw[topTraderRatioRaw.length - 1]
             : null,
-        ticker,
-        price: priceData,
+        ticker: null,
+        price: null,
         fundingRate:
           Array.isArray(fundingDataRaw) && fundingDataRaw.length > 0
             ? fundingDataRaw[fundingDataRaw.length - 1]

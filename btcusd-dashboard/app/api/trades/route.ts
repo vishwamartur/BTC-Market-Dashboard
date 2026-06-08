@@ -11,7 +11,7 @@ export async function GET(request: Request) {
 
     const db = await getDb();
     const trades = await db.collection('trades')
-      .find({})
+      .find({ type: { $ne: 'ARBITRAGE' } })
       .sort({ timestamp: -1 })
       .limit(limit)
       .toArray();

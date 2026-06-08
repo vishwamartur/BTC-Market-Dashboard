@@ -194,6 +194,10 @@ export function useLiquidationData() {
               ...s,
               [msg.stream]: msg.connected
             }));
+          } else if (msg.type === 'ticker') {
+            setWsStatus(s => s.ticker ? s : { ...s, ticker: true });
+            setTicker(msg.data);
+            setLastUpdate(Date.now());
           } else if (msg.type === 'price') {
             setWsStatus(s => s.price ? s : { ...s, price: true });
             const raw = msg.data;
