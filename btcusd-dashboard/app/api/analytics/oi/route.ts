@@ -14,11 +14,17 @@ export async function GET(request: Request) {
 
     const sinceTs = Date.now() - hours * 60 * 60 * 1000;
 
-    // Get market snapshots within the time window, sampled every ~5 minutes
-    const snapshots = await collection
+    // Get market snapshots within the time window, using a cursor and projection
+    const cursor = collection
       .find({ timestamp: { $gt: sinceTs } })
       .sort({ timestamp: 1 })
-      .toArray();
+      .project({
+        timestamp: 1,
+        'price.price': 1,
+        'ticker.lastPrice': 1,
+        'openInterest.openInterest': 1,
+        'longShortRatio.longShortRatio': 1,
+      });
 
     // Downsample to prevent too many points — keep 1 per ~5 minute window
     const sampledData: {
@@ -30,8 +36,10 @@ export async function GET(request: Request) {
 
     let lastSampledTs = 0;
     const SAMPLE_INTERVAL = 5 * 60 * 1000; // 5 minutes
+    let totalSnapshots = 0;
 
-    for (const snap of snapshots) {
+    for await (const snap of cursor) {
+      totalSnapshots++;
       if (snap.timestamp - lastSampledTs < SAMPLE_INTERVAL) continue;
       lastSampledTs = snap.timestamp;
 
@@ -60,7 +68,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       data: sampledData,
       hours,
-      totalSnapshots: snapshots.length,
+      totalSnapshots,
       sampledPoints: sampledData.length,
       timestamp: Date.now(),
     });

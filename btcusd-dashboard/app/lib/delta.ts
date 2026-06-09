@@ -55,9 +55,11 @@ interface DeltaRequestOptions {
   retries?: number;
 }
 
-async function deltaRequest<T = Record<string, unknown>>(opts: DeltaRequestOptions): Promise<T & { success: boolean; error?: unknown }> {
+let timeOffset = 0;
+
+async function deltaRequest<T = Record<string, unknown>>(opts: DeltaRequestOptions, isTimeRetry = false): Promise<T & { success: boolean; error?: unknown }> {
   const { method, path, apiKey, apiSecret, payload = '', label = 'deltaRequest', retries = 2 } = opts;
-  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const timestamp = (Math.floor(Date.now() / 1000) + timeOffset).toString();
   const signature = generateSignature(method, path, payload, apiSecret, timestamp);
   const url = `${DELTA_BASE_URL}${path}`;
 
@@ -95,6 +97,13 @@ async function deltaRequest<T = Record<string, unknown>>(opts: DeltaRequestOptio
     }
 
     if (!data.success) {
+      const errObj = data.error as any;
+      if (!isTimeRetry && errObj && errObj.code === 'expired_signature' && errObj.context && typeof errObj.context.server_time === 'number') {
+        const serverTime = errObj.context.server_time;
+        timeOffset = serverTime - Math.floor(Date.now() / 1000);
+        console.warn(`[${label}] Signature expired. Adjusting timeOffset to ${timeOffset}s and retrying.`);
+        return deltaRequest(opts, true);
+      }
       console.error(`[${label}] API returned success=false | error: ${JSON.stringify(data.error)}`);
     }
 
