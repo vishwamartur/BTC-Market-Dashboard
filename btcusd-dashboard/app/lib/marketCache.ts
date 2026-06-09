@@ -20,7 +20,7 @@ export interface MarketSnapshot {
 class MarketCache {
   private cache: MarketSnapshot | null = null;
   private lastFetchTime = 0;
-  private fetching = false;
+  private fetchPromise: Promise<void> | null = null;
   private started = false;
   private intervalId: ReturnType<typeof setInterval> | null = null;
 
@@ -69,59 +69,62 @@ class MarketCache {
     }, POLL_INTERVAL_MS);
   }
 
-  private async fetchAll(): Promise<void> {
-    if (this.fetching) return; // deduplicate concurrent calls
-    this.fetching = true;
+  private fetchAll(): Promise<void> {
+    if (this.fetchPromise) return this.fetchPromise;
 
-    try {
-      const [lsRatioRes, oiRes, ttRatioRes, fundingRes] =
-        await Promise.allSettled([
-          fetch(`${BINANCE_FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1`),
-          fetch(`${BINANCE_FAPI}/fapi/v1/openInterest?symbol=BTCUSDT`),
-          fetch(`${BINANCE_FAPI}/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1`),
-          fetch(`${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`),
-        ]);
+    this.fetchPromise = (async () => {
+      try {
+        const [lsRatioRes, oiRes, ttRatioRes, fundingRes] =
+          await Promise.allSettled([
+            fetch(`${BINANCE_FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1`),
+            fetch(`${BINANCE_FAPI}/fapi/v1/openInterest?symbol=BTCUSDT`),
+            fetch(`${BINANCE_FAPI}/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1`),
+            fetch(`${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`),
+          ]);
 
-      const extract = async (res: PromiseSettledResult<Response>) => {
-        if (res.status === 'fulfilled' && res.value.ok) {
-          return res.value.json();
+        const extract = async (res: PromiseSettledResult<Response>) => {
+          if (res.status === 'fulfilled' && res.value.ok) {
+            return res.value.json();
+          }
+          return null;
+        };
+
+        const longShortRatioRaw = await extract(lsRatioRes);
+        const openInterest = await extract(oiRes);
+        const topTraderRatioRaw = await extract(ttRatioRes);
+        const fundingDataRaw = await extract(fundingRes);
+
+        const snapshot: MarketSnapshot = {
+          longShortRatio:
+            Array.isArray(longShortRatioRaw) && longShortRatioRaw.length > 0
+              ? longShortRatioRaw[longShortRatioRaw.length - 1]
+              : null,
+          openInterest,
+          topTraderRatio:
+            Array.isArray(topTraderRatioRaw) && topTraderRatioRaw.length > 0
+              ? topTraderRatioRaw[topTraderRatioRaw.length - 1]
+              : null,
+          ticker: null,
+          price: null,
+          fundingRate:
+            Array.isArray(fundingDataRaw) && fundingDataRaw.length > 0
+              ? fundingDataRaw[fundingDataRaw.length - 1]
+              : null,
+          timestamp: Date.now(),
+        };
+
+        this.cache = snapshot;
+        this.lastFetchTime = Date.now();
+
+        if (this.persistCallback) {
+          try { this.persistCallback(snapshot); } catch { /* ignore */ }
         }
-        return null;
-      };
-
-      const longShortRatioRaw = await extract(lsRatioRes);
-      const openInterest = await extract(oiRes);
-      const topTraderRatioRaw = await extract(ttRatioRes);
-      const fundingDataRaw = await extract(fundingRes);
-
-      const snapshot: MarketSnapshot = {
-        longShortRatio:
-          Array.isArray(longShortRatioRaw) && longShortRatioRaw.length > 0
-            ? longShortRatioRaw[longShortRatioRaw.length - 1]
-            : null,
-        openInterest,
-        topTraderRatio:
-          Array.isArray(topTraderRatioRaw) && topTraderRatioRaw.length > 0
-            ? topTraderRatioRaw[topTraderRatioRaw.length - 1]
-            : null,
-        ticker: null,
-        price: null,
-        fundingRate:
-          Array.isArray(fundingDataRaw) && fundingDataRaw.length > 0
-            ? fundingDataRaw[fundingDataRaw.length - 1]
-            : null,
-        timestamp: Date.now(),
-      };
-
-      this.cache = snapshot;
-      this.lastFetchTime = Date.now();
-
-      if (this.persistCallback) {
-        try { this.persistCallback(snapshot); } catch { /* ignore */ }
+      } finally {
+        this.fetchPromise = null;
       }
-    } finally {
-      this.fetching = false;
-    }
+    })();
+
+    return this.fetchPromise;
   }
 
   destroy() {
