@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import ClientIP from '../components/ClientIP';
 import WalletPNLChart from '../components/WalletPNLChart';
+import CostAnalysis from '../components/CostAnalysis';
 
 interface WalletBalance {
   asset_id: number;
@@ -156,6 +157,10 @@ export default function WalletPage() {
 
       <div style={{ marginTop: '24px' }}>
         <WalletPNLChart />
+      </div>
+
+      <div style={{ marginTop: '24px' }}>
+        <CostAnalysis />
       </div>
     </main>
   );
