@@ -21,6 +21,7 @@ import TradePerformance from './components/TradePerformance';
 import OIDivergence from './components/OIDivergence';
 import WhaleFlows from './components/WhaleFlows';
 import ClientIP from './components/ClientIP';
+import FeeBreakevenCard from './components/FeeBreakevenCard';
 import Link from 'next/link';
 
 export default function Dashboard() {
@@ -69,7 +70,7 @@ export default function Dashboard() {
     isPositionLoaded,
     isClosingPosition,
     closeActivePosition,
-  } = useAutonomousTrading({ signal });
+  } = useAutonomousTrading({ signal, currentPrice: price });
 
   return (
     <main className="dashboard">
@@ -134,6 +135,12 @@ export default function Dashboard() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           <PriceArbitrage />
           <SignalEngine signal={signal} />
+          <FeeBreakevenCard
+            currentPrice={price}
+            signalConfidence={signal.confidence}
+            signalScore={signal.score}
+            signalDirection={signal.overallSignal}
+          />
           <AutoTraderControl 
             isEnabled={isEnabled}
             setIsEnabled={setIsEnabled}
