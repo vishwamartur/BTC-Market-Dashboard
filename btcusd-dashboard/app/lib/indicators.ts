@@ -188,3 +188,32 @@ export function priceMomentumScore(prices: number[]): number {
 
   return Math.max(-1, Math.min(1, score));
 }
+
+/**
+ * Short-window momentum score for when we have < 25 price points.
+ * Uses EMA5 and EMA10 for faster reaction to momentum.
+ * Returns a score between -1 (strong bearish) and +1 (strong bullish).
+ */
+export function shortMomentumScore(prices: number[]): number {
+  if (prices.length < 10) return 0;
+
+  const current = prices[prices.length - 1];
+  const ema5 = calcEMA(prices, 5);
+  const ema10 = calcEMA(prices, 10);
+
+  const ema5Val = ema5[ema5.length - 1];
+  const ema10Val = ema10[ema10.length - 1];
+
+  let score = 0;
+
+  // Price vs EMA5 (very short-term momentum)
+  const diffShort = (current - ema5Val) / ema5Val;
+  score += Math.max(-0.5, Math.min(0.5, diffShort * 30)); // More sensitive scaling
+
+  // EMA5 vs EMA10 (short trend direction)
+  const diffTrend = (ema5Val - ema10Val) / ema10Val;
+  score += Math.max(-0.5, Math.min(0.5, diffTrend * 20));
+
+  return Math.max(-1, Math.min(1, score));
+}
+

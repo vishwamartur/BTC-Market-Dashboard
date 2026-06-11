@@ -254,7 +254,8 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
     // Check if trading is enabled and signal is strong enough
     if (!isEnabled || !isPositionLoaded || isExecutingRef.current) return;
 
-    // Signal debounce: require same signal direction for 3 consecutive evaluations
+    // Signal debounce: require consecutive same-direction signals
+    // Long-biased: BUY needs 2 consecutive, SELL needs 3 (more cautious for shorts)
     if (signal.overallSignal === lastSignalRef.current) {
       consecutiveSignalCountRef.current++;
     } else {
@@ -262,8 +263,9 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
       lastSignalRef.current = signal.overallSignal;
     }
 
-    // Need at least 3 consecutive same-direction signals before acting
-    if (consecutiveSignalCountRef.current < 3) return;
+    const isBuyish = signal.overallSignal === 'STRONG BUY' || signal.overallSignal === 'BUY';
+    const requiredConsecutive = isBuyish ? 2 : 3; // Faster entry for longs
+    if (consecutiveSignalCountRef.current < requiredConsecutive) return;
 
     // Use risk manager to determine if and how much to trade (fee-aware)
     const decision = shouldTrade({

@@ -28,16 +28,16 @@ export interface RiskConfig {
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
   maxDailyLossUsd: 100,
   maxPositionSize: 40,            // Increased from 20 — better fee-to-profit ratio
-  minPositionSize: 10,            // NEW: minimum 10 contracts (fees on 1-5 are never worth it)
-  minConfidence: 60,              // Raised from 40 — only trade strong signals
+  minPositionSize: 10,            // Minimum 10 contracts (fees on 1-5 are never worth it)
+  minConfidence: 45,              // Lowered from 60 — allow momentum signals to trigger
   riskRewardRatio: 2.0,
   stopLossAtrMultiplier: 1.5,
-  cooldownMs: 15 * 60 * 1000,    // 15 minutes (was 5 min) — reduce over-trading
+  cooldownMs: 5 * 60 * 1000,     // 5 minutes — faster for momentum trading
   takerFeePct: 0.0005,            // 0.05% Delta Exchange taker fee
   makerFeePct: 0.0002,            // 0.02% Delta Exchange maker fee
   gstRate: 0.1525,                // 15.25% GST on trading fees (observed from user data)
-  estimatedWinPct: 0.005,         // 0.5% expected win move (was 0.3%)
-  estimatedLossPct: 0.002,        // 0.2% expected loss move (was 0.15%)
+  estimatedWinPct: 0.005,         // 0.5% expected win move
+  estimatedLossPct: 0.002,        // 0.2% expected loss move
   minBreakEvenMultiple: 1.5,      // Expected profit must be >= 1.5× fees
   contractSizeBtc: 0.001,         // 0.001 BTC per contract on Delta
 };
@@ -215,10 +215,14 @@ export function shouldTrade(
 
   let action: 'BUY' | 'SELL' | null = null;
 
-  // Require STRONG signals with sufficient confidence
-  if (signal.overallSignal === 'STRONG BUY' && signal.score >= 0.5) {
+  // LONG-BIASED: Accept both BUY and STRONG BUY for long entries
+  // BUY requires score >= 0.25, STRONG BUY at >= 0.35 (from signal engine)
+  if (signal.overallSignal === 'STRONG BUY' && signal.score >= 0.3) {
     action = 'BUY';
-  } else if (signal.overallSignal === 'STRONG SELL' && signal.score <= -0.5) {
+  } else if (signal.overallSignal === 'BUY' && signal.score >= 0.2 && signal.confidence >= 50) {
+    action = 'BUY';
+  } else if (signal.overallSignal === 'STRONG SELL' && signal.score <= -0.4) {
+    // SELL requires stronger conviction (long-biased strategy)
     action = 'SELL';
   }
 
