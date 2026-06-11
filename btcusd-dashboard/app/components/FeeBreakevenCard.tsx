@@ -228,7 +228,7 @@ export default function FeeBreakevenCard({
             letterSpacing: '1px',
             marginBottom: '8px',
           }}>
-            Taker vs Maker Fee Comparison
+            Market Order Fee (Active Strategy)
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
             <div>

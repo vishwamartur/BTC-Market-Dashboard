@@ -36,8 +36,8 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   takerFeePct: 0.0005,            // 0.05% Delta Exchange taker fee
   makerFeePct: 0.0002,            // 0.02% Delta Exchange maker fee
   gstRate: 0.1525,                // 15.25% GST on trading fees (observed from user data)
-  estimatedWinPct: 0.005,         // 0.5% expected win move
-  estimatedLossPct: 0.002,        // 0.2% expected loss move
+  estimatedWinPct: 0.008,         // 0.8% expected win move — target bigger momentum captures
+  estimatedLossPct: 0.003,        // 0.3% expected loss move — tighter stops with momentum
   minBreakEvenMultiple: 1.5,      // Expected profit must be >= 1.5× fees
   contractSizeBtc: 0.001,         // 0.001 BTC per contract on Delta
 };

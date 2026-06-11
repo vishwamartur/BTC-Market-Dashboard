@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDeltaPositions, placeDeltaOrder, setDeltaLeverage, getOrderById, cancelOrder } from '../../lib/delta';
+import { getDeltaPositions, placeDeltaOrder, setDeltaLeverage } from '../../lib/delta';
 import { insertOneAsync } from '../../lib/db';
 import { normalizeDeltaPosition } from '../../lib/positions';
 import { calculateBreakEven, DEFAULT_RISK_CONFIG } from '../../lib/riskManager';
@@ -17,14 +17,6 @@ const LEVERAGE = 50;
 // Server-side safety limits
 const DEFAULT_TRADE_SIZE = 15;
 const MAX_TRADE_SIZE = 50; // Hard cap regardless of client request
-
-// Maker order offset — place limit orders this many USD inside the spread
-// to maximize maker fill chance (0.02% fee vs 0.05% taker)
-const MAKER_OFFSET_USD = 0.5;
-
-// Order fill monitoring — wait up to 30s for limit order to fill
-const FILL_CHECK_INTERVAL_MS = 3000;
-const FILL_TIMEOUT_MS = 30000;
 
 // ---------------------------------------------------------------------------
 // Rate limiter (1 trade per 5 seconds)
@@ -198,111 +190,41 @@ export async function POST(request: Request) {
       // (sometimes it throws leverage_not_changed which is fine)
     }
 
-    // 2. Fetch Ticker for Best Price — use maker offset for better fees
-    let limitPrice: string | undefined;
-    try {
-      const baseUrl = process.env.DELTA_BASE_URL || 'https://api.india.delta.exchange';
-      const tickerRes = await fetch(`${baseUrl}/v2/tickers/BTCUSD`);
-      const tickerData = await tickerRes.json();
-      if (tickerData.success) {
-        // Maker strategy: offset price to get maker fill (0.02% fee instead of 0.05%)
-        // Buy: place slightly below best_bid (we're offering to buy cheaper)
-        // Sell: place slightly above best_ask (we're offering to sell higher)
-        const bestBid = parseFloat(tickerData.result.quotes.best_bid);
-        const bestAsk = parseFloat(tickerData.result.quotes.best_ask);
-        
-        if (side === 'buy') {
-          const makerPrice = bestBid - MAKER_OFFSET_USD;
-          limitPrice = makerPrice.toFixed(2);
-        } else {
-          const makerPrice = bestAsk + MAKER_OFFSET_USD;
-          limitPrice = makerPrice.toFixed(2);
-        }
-        console.log(`[REAL TRADE] Maker limit price: ${limitPrice} (bid: ${bestBid}, ask: ${bestAsk}, offset: ±$${MAKER_OFFSET_USD})`);
-      }
-    } catch (e) {
-      console.error('[REAL TRADE] Error fetching ticker:', e);
-      return NextResponse.json({ error: 'Failed to fetch limit price' }, { status: 500 });
-    }
+    // 2. Execute MARKET order — instant fill for momentum capture
+    // Taker fee: 0.05% per side — worth it to capture more price movement
+    console.log(`[REAL TRADE] Sending MARKET order to Delta: ${side.toUpperCase()} ${size} contracts`);
 
-    if (!limitPrice) {
-      return NextResponse.json({ error: 'Could not determine limit price' }, { status: 500 });
-    }
-
-    // 3. Execute Limit Order (maker strategy)
-    console.log(`[REAL TRADE] Sending MAKER LIMIT order to Delta: ${side.toUpperCase()} ${size} contracts at ${limitPrice}`);
     const result = await placeDeltaOrder(
       DELTA_API_KEY,
       DELTA_API_SECRET,
       BTCUSDT_PRODUCT_ID,
       size,
       side,
-      'limit',
-      limitPrice
+      'market'
     );
 
-    // Calculate fee estimates for cost tracking
-    const entryPrice = parseFloat(limitPrice);
-    const breakEvenData = calculateBreakEven(size, entryPrice, DEFAULT_RISK_CONFIG, true);
+    // Estimate entry price from ticker for cost tracking
+    let estimatedPrice = 0;
+    try {
+      const baseUrl = process.env.DELTA_BASE_URL || 'https://api.india.delta.exchange';
+      const tickerRes = await fetch(`${baseUrl}/v2/tickers/BTCUSD`);
+      const tickerData = await tickerRes.json();
+      if (tickerData.success) {
+        // For market buys, we'll likely fill near ask; for sells, near bid
+        estimatedPrice = side === 'buy'
+          ? parseFloat(tickerData.result.quotes.best_ask)
+          : parseFloat(tickerData.result.quotes.best_bid);
+      }
+    } catch {
+      // Non-critical — just for cost tracking
+    }
+
+    // Calculate fee estimates for cost tracking (using taker fee)
+    const trackPrice = estimatedPrice || 100000; // fallback
+    const breakEvenData = calculateBreakEven(size, trackPrice, DEFAULT_RISK_CONFIG, false); // false = taker fees
 
     if (result.success) {
-      const orderId = result.result?.id;
-      console.log('[REAL TRADE] Order placed:', orderId);
-
-      // Monitor order fill with timeout
-      let filled = false;
-      if (orderId) {
-        const startTime = Date.now();
-        while (Date.now() - startTime < FILL_TIMEOUT_MS) {
-          await new Promise(resolve => setTimeout(resolve, FILL_CHECK_INTERVAL_MS));
-          try {
-            const orderCheck = await getOrderById(DELTA_API_KEY, DELTA_API_SECRET, orderId);
-            const orderResult = orderCheck.result as Record<string, unknown> | undefined;
-            const state = orderResult?.state as string;
-            if (state === 'closed' || state === 'filled') {
-              filled = true;
-              console.log(`[REAL TRADE] Order ${orderId} filled!`);
-              break;
-            } else if (state === 'cancelled') {
-              console.log(`[REAL TRADE] Order ${orderId} was cancelled externally`);
-              break;
-            }
-          } catch (checkErr) {
-            console.warn('[REAL TRADE] Error checking order status:', checkErr);
-          }
-        }
-
-        // If not filled after timeout, cancel and log
-        if (!filled) {
-          console.log(`[REAL TRADE] Order ${orderId} not filled after ${FILL_TIMEOUT_MS / 1000}s. Cancelling...`);
-          try {
-            await cancelOrder(DELTA_API_KEY, DELTA_API_SECRET, orderId, BTCUSDT_PRODUCT_ID);
-            console.log(`[REAL TRADE] Order ${orderId} cancelled.`);
-          } catch (cancelErr) {
-            console.warn('[REAL TRADE] Error cancelling order:', cancelErr);
-          }
-
-          insertOneAsync('trades', {
-            timestamp: new Date(),
-            action: action as string,
-            side,
-            size,
-            status: 'CANCELLED_TIMEOUT',
-            orderId,
-            productId: BTCUSDT_PRODUCT_ID,
-            reason: `Not filled within ${FILL_TIMEOUT_MS / 1000}s`,
-            estimatedFeeUsd: breakEvenData.feeUsd,
-            estimatedGstUsd: breakEvenData.gstUsd,
-            breakEvenMovePct: breakEvenData.breakEvenMovePct,
-          });
-
-          return cacheAndRespond(requestId, {
-            success: false,
-            error: 'Order not filled within timeout, cancelled',
-            orderId,
-          }, 408);
-        }
-      }
+      console.log(`[REAL TRADE] MARKET order filled instantly! Order ID: ${result.result?.id}`);
 
       // Persist successful trade with fee tracking to MongoDB
       insertOneAsync('trades', {
@@ -320,13 +242,14 @@ export async function POST(request: Request) {
         roundTripCostUsd: breakEvenData.roundTripCostUsd,
         breakEvenMovePct: breakEvenData.breakEvenMovePct,
         notionalUsd: breakEvenData.notionalUsd,
-        limitPrice: entryPrice,
-        feeType: 'maker',
+        estimatedPrice,
+        feeType: 'taker',
+        orderType: 'market',
       });
 
       return cacheAndRespond(requestId, result, 200);
     } else {
-      console.error('[REAL TRADE] Failed:', result.error);
+      console.error('[REAL TRADE] MARKET order failed:', result.error);
 
       // Persist failed trade to MongoDB with fee estimates
       insertOneAsync('trades', {
@@ -340,6 +263,7 @@ export async function POST(request: Request) {
         estimatedFeeUsd: breakEvenData.feeUsd,
         estimatedGstUsd: breakEvenData.gstUsd,
         breakEvenMovePct: breakEvenData.breakEvenMovePct,
+        orderType: 'market',
       });
 
       return cacheAndRespond(requestId, result, 400);
