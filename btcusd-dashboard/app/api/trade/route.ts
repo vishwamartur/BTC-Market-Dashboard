@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { getDeltaPositions, placeDeltaOrder, setDeltaLeverage } from '../../lib/delta';
 import { insertOneAsync } from '../../lib/db';
 import { normalizeDeltaPosition } from '../../lib/positions';
-import { calculateBreakEven, DEFAULT_RISK_CONFIG } from '../../lib/riskManager';
 
 export const runtime = 'nodejs';
 
@@ -190,43 +189,42 @@ export async function POST(request: Request) {
       // (sometimes it throws leverage_not_changed which is fine)
     }
 
-    // 2. Execute MARKET order — instant fill for momentum capture
-    // Taker fee: 0.05% per side — worth it to capture more price movement
-    console.log(`[REAL TRADE] Sending MARKET order to Delta: ${side.toUpperCase()} ${size} contracts`);
+    // 2. Fetch Ticker for Best Price
+    let limitPrice: string | undefined;
+    try {
+      const baseUrl = process.env.DELTA_BASE_URL || 'https://api.india.delta.exchange';
+      const tickerRes = await fetch(`${baseUrl}/v2/tickers/BTCUSD`);
+      const tickerData = await tickerRes.json();
+      if (tickerData.success) {
+        // Use best_bid for Buy (Maker), best_ask for Sell (Maker)
+        limitPrice = side === 'buy' ? tickerData.result.quotes.best_bid : tickerData.result.quotes.best_ask;
+        console.log(`[REAL TRADE] Fetched limit price: ${limitPrice}`);
+      }
+    } catch (e) {
+      console.error('[REAL TRADE] Error fetching ticker:', e);
+      return NextResponse.json({ error: 'Failed to fetch limit price' }, { status: 500 });
+    }
 
+    if (!limitPrice) {
+      return NextResponse.json({ error: 'Could not determine limit price' }, { status: 500 });
+    }
+
+    // 3. Execute Limit Order
+    console.log(`[REAL TRADE] Sending LIMIT order to Delta: ${side.toUpperCase()} ${size} contracts at ${limitPrice}`);
     const result = await placeDeltaOrder(
       DELTA_API_KEY,
       DELTA_API_SECRET,
       BTCUSDT_PRODUCT_ID,
       size,
       side,
-      'market'
+      'limit',
+      limitPrice
     );
 
-    // Estimate entry price from ticker for cost tracking
-    let estimatedPrice = 0;
-    try {
-      const baseUrl = process.env.DELTA_BASE_URL || 'https://api.india.delta.exchange';
-      const tickerRes = await fetch(`${baseUrl}/v2/tickers/BTCUSD`);
-      const tickerData = await tickerRes.json();
-      if (tickerData.success) {
-        // For market buys, we'll likely fill near ask; for sells, near bid
-        estimatedPrice = side === 'buy'
-          ? parseFloat(tickerData.result.quotes.best_ask)
-          : parseFloat(tickerData.result.quotes.best_bid);
-      }
-    } catch {
-      // Non-critical — just for cost tracking
-    }
-
-    // Calculate fee estimates for cost tracking (using taker fee)
-    const trackPrice = estimatedPrice || 100000; // fallback
-    const breakEvenData = calculateBreakEven(size, trackPrice, DEFAULT_RISK_CONFIG, false); // false = taker fees
-
     if (result.success) {
-      console.log(`[REAL TRADE] MARKET order filled instantly! Order ID: ${result.result?.id}`);
+      console.log('[REAL TRADE] Success:', result.result);
 
-      // Persist successful trade with fee tracking to MongoDB
+      // Persist real trade to MongoDB
       insertOneAsync('trades', {
         timestamp: new Date(),
         action: action as string,
@@ -236,22 +234,13 @@ export async function POST(request: Request) {
         orderId: result.result?.id,
         productId: BTCUSDT_PRODUCT_ID,
         rawResult: result.result,
-        // Fee tracking fields
-        estimatedFeeUsd: breakEvenData.feeUsd,
-        estimatedGstUsd: breakEvenData.gstUsd,
-        roundTripCostUsd: breakEvenData.roundTripCostUsd,
-        breakEvenMovePct: breakEvenData.breakEvenMovePct,
-        notionalUsd: breakEvenData.notionalUsd,
-        estimatedPrice,
-        feeType: 'taker',
-        orderType: 'market',
       });
 
       return cacheAndRespond(requestId, result, 200);
     } else {
-      console.error('[REAL TRADE] MARKET order failed:', result.error);
+      console.error('[REAL TRADE] Failed:', result.error);
 
-      // Persist failed trade to MongoDB with fee estimates
+      // Persist failed trade to MongoDB
       insertOneAsync('trades', {
         timestamp: new Date(),
         action: action as string,
@@ -260,10 +249,6 @@ export async function POST(request: Request) {
         status: 'FAILED',
         error: result.error,
         productId: BTCUSDT_PRODUCT_ID,
-        estimatedFeeUsd: breakEvenData.feeUsd,
-        estimatedGstUsd: breakEvenData.gstUsd,
-        breakEvenMovePct: breakEvenData.breakEvenMovePct,
-        orderType: 'market',
       });
 
       return cacheAndRespond(requestId, result, 400);

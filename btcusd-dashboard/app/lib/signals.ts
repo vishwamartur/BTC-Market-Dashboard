@@ -1,6 +1,6 @@
 import type { LiquidationStats } from '../hooks/useLiquidationData';
 import type { WhaleTransaction } from './blockchain';
-import { priceMomentumScore, shortMomentumScore, rollingZScore } from './indicators';
+import { priceMomentumScore, rollingZScore } from './indicators';
 
 export type SignalStrength = 'STRONG BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG SELL';
 
@@ -37,7 +37,7 @@ export interface SignalInputs {
  * Kept module-level so it persists across re-renders.
  */
 const signalHistory: number[] = [];
-const MAX_SIGNAL_HISTORY = 8; // Reduced from 20 for faster momentum reaction
+const MAX_SIGNAL_HISTORY = 20;
 
 export function generateTradingSignal(inputs: SignalInputs): SignalResult {
   const components: SignalComponent[] = [];
@@ -60,7 +60,7 @@ export function generateTradingSignal(inputs: SignalInputs): SignalResult {
       // Scale smoothly
       score = (longPct - 0.5) * 1.6; // 0.5 -> 0, 1.0 -> 0.8
     }
-    components.push({ name: 'Liquidation Imbalance', score, weight: 0.15, reason });
+    components.push({ name: 'Liquidation Imbalance', score, weight: 0.20, reason });
   }
 
   // 2. Long/Short Ratio (weight: 0.15)
@@ -78,21 +78,19 @@ export function generateTradingSignal(inputs: SignalInputs): SignalResult {
       score = (1 - inputs.longShortRatio) * 0.5;
       reason = 'Moderate positioning';
     }
-    components.push({ name: 'Long/Short Ratio', score, weight: 0.10, reason });
+    components.push({ name: 'Long/Short Ratio', score, weight: 0.15, reason });
   }
 
-  // 3. Price Momentum (weight: 0.30 — PRIMARY driver for momentum trading)
-  if (inputs.recentPrices && inputs.recentPrices.length >= 10) {
-    const momentumScore = inputs.recentPrices.length >= 25
-      ? priceMomentumScore(inputs.recentPrices)
-      : shortMomentumScore(inputs.recentPrices);
+  // 3. Price Momentum — NEW (weight: 0.20)
+  if (inputs.recentPrices && inputs.recentPrices.length >= 25) {
+    const momentumScore = priceMomentumScore(inputs.recentPrices);
     let reason = 'Flat momentum';
-    if (momentumScore > 0.3) reason = 'Strong upward momentum 🚀';
+    if (momentumScore > 0.3) reason = 'Strong upward momentum';
     else if (momentumScore > 0.1) reason = 'Mild upward momentum';
     else if (momentumScore < -0.3) reason = 'Strong downward momentum';
     else if (momentumScore < -0.1) reason = 'Mild downward momentum';
 
-    components.push({ name: 'Price Momentum', score: momentumScore, weight: 0.30, reason });
+    components.push({ name: 'Price Momentum', score: momentumScore, weight: 0.20, reason });
   }
 
   // 4. Funding Rate — NEW (weight: 0.15)
@@ -142,7 +140,7 @@ export function generateTradingSignal(inputs: SignalInputs): SignalResult {
       score = priceChange > 0 ? -0.3 : 0.3; // Deleveraging
       reason = `Falling OI (Deleveraging: ${(oiChange * 100).toFixed(1)}%)`;
     }
-    components.push({ name: 'OI Delta', score, weight: 0.15, reason });
+    components.push({ name: 'OI Delta', score, weight: 0.10, reason });
   }
 
   // 6. Mempool Congestion (weight: 0.05)
@@ -234,12 +232,12 @@ export function generateTradingSignal(inputs: SignalInputs): SignalResult {
   }
   const finalScore = smoothWeight > 0 ? smoothedScore / smoothWeight : rawScore;
   
-  // Map to SignalStrength — lowered thresholds for momentum trading
+  // Map to SignalStrength
   let overallSignal: SignalStrength = 'NEUTRAL';
-  if (finalScore >= 0.35) overallSignal = 'STRONG BUY';     // Was 0.5 — easier to trigger
-  else if (finalScore >= 0.12) overallSignal = 'BUY';        // Was 0.15
-  else if (finalScore <= -0.35) overallSignal = 'STRONG SELL';
-  else if (finalScore <= -0.12) overallSignal = 'SELL';
+  if (finalScore >= 0.5) overallSignal = 'STRONG BUY';
+  else if (finalScore >= 0.15) overallSignal = 'BUY';
+  else if (finalScore <= -0.5) overallSignal = 'STRONG SELL';
+  else if (finalScore <= -0.15) overallSignal = 'SELL';
 
   // Confidence: combination of score magnitude and number of contributing signals
   const signalCoverage = totalWeight; // how many signals are active (sum of weights)
