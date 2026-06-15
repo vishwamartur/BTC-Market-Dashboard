@@ -19,7 +19,6 @@ export interface TradeLog {
 
 interface UseAutonomousTradingProps {
   signal: SignalResult;
-  currentPrice?: number;
 }
 
 const RISK_CONFIG: RiskConfig = DEFAULT_RISK_CONFIG;
@@ -35,7 +34,7 @@ function normalizeTradeAction(action: unknown): TradeAction {
   return 'BUY';
 }
 
-export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomousTradingProps) {
+export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
   // SAFETY: default to disabled — user must explicitly enable
   const [isEnabled, setIsEnabled] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -265,12 +264,12 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
     // Need at least 3 consecutive same-direction signals before acting
     if (consecutiveSignalCountRef.current < 3) return;
 
-    // Use risk manager to determine if and how much to trade (fee-aware)
+    // Use risk manager to determine if and how much to trade
     const decision = shouldTrade({
       overallSignal: signal.overallSignal,
       confidence: signal.confidence,
       score: signal.score,
-    }, RISK_CONFIG, currentPrice);
+    }, RISK_CONFIG);
 
     if (activePosition) {
       const shouldCloseLong = activePosition.side === 'LONG' && decision.action === 'SELL';
@@ -312,7 +311,6 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
     signal.score,
     signal.confidence,
     dailyPnl,
-    currentPrice,
     executeTrade,
     closeActivePosition,
   ]);
