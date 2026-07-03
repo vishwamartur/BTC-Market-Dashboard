@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { z } from 'zod';
 
 const Schema = z.object({
@@ -5,7 +6,8 @@ const Schema = z.object({
   DELTA_API_SECRET: z.string().min(1),
   DELTA_BASE_URL: z.string().url().default('https://api.india.delta.exchange'),
   MONGODB_URI: z.string().min(1),
-  HEARTBEAT_URL: z.string().url(),
+  DASHBOARD_URL: z.string().url().default('http://localhost:3000'),
+  HEARTBEAT_URL: z.string().url().optional(),
   BOT_DISABLED: z.preprocess(v => v === 'true' || v === true, z.boolean()).default(false),
   DRY_RUN: z.preprocess(v => v === 'true' || v === true, z.boolean()).default(false),
   LOG_LEVEL: z.enum(['trace','debug','info','warn','error','fatal']).default('info'),
