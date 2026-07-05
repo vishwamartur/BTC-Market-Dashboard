@@ -151,13 +151,24 @@ export async function placeDeltaOrder(
 }
 
 export async function getDeltaPositions(apiKey: string, apiSecret: string, productId?: number): Promise<DeltaPositionResponse> {
-  const path = productId ? `/v2/positions?product_id=${productId}` : '/v2/positions';
+  const path = productId ? `/v2/positions?product_id=${productId}` : '/v2/positions?underlying_asset_symbol=BTC';
   return deltaRequest<DeltaPositionResponse>({
     method: 'GET',
     path,
     apiKey,
     apiSecret,
     label: 'getDeltaPositions',
+    retries: 2,
+  });
+}
+
+export async function getAllPositions(apiKey: string, apiSecret: string): Promise<DeltaPositionResponse> {
+  return deltaRequest<DeltaPositionResponse>({
+    method: 'GET',
+    path: '/v2/positions?underlying_asset_symbol=BTC',
+    apiKey,
+    apiSecret,
+    label: 'getAllPositions',
     retries: 2,
   });
 }

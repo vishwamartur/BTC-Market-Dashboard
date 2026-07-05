@@ -1,9 +1,9 @@
 import { loadConfig } from './config/index.js';
 import { fetchSignal, fetchMarketPrice } from './signalFetcher.js';
-import { getDeltaPositions, placeDeltaOrder } from './delta.js';
+import { getAllPositions, placeDeltaOrder } from './delta.js';
 import { shouldTrade, canTrade, DEFAULT_RISK_CONFIG } from './riskManager.js';
 import { logger } from './logger.js';
-import { executeShortStraddle } from './optionsManager.js';
+import { executeShortStraddle, closeOptionsHedge } from './optionsManager.js';
 
 const BTCUSDT_PRODUCT_ID = 27;
 
@@ -18,18 +18,7 @@ async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizePosition(rawResult: any, productId: number) {
-  if (!Array.isArray(rawResult)) return null;
-  const pos = rawResult.find((p: any) => p.product_id === productId);
-  if (!pos || pos.size === 0) return null;
-  
-  return {
-    side: pos.size > 0 ? 'LONG' : 'SHORT',
-    size: Math.abs(pos.size),
-    entryPrice: Number(pos.entry_price) || null,
-    unrealizedPnl: Number(pos.unrealized_pnl) || null,
-  };
-}
+
 
 async function closeActivePosition(config: any, position: any, reason: string) {
   logger.info({ reason, position }, 'Closing active position');
@@ -85,8 +74,22 @@ async function mainLoop() {
       const signal = await fetchSignal(config);
       const currentPrice = await fetchMarketPrice(config);
       
-      const posRes = await getDeltaPositions(config.DELTA_API_KEY, config.DELTA_API_SECRET, BTCUSDT_PRODUCT_ID);
-      const activePosition = posRes.success ? normalizePosition(posRes.result, BTCUSDT_PRODUCT_ID) : null;
+      // Fetch ALL BTC positions (futures + options)
+      const allPosRes = await getAllPositions(config.DELTA_API_KEY, config.DELTA_API_SECRET);
+      const allPositions = (allPosRes.success && Array.isArray(allPosRes.result)) ? allPosRes.result as any[] : [];
+
+      // Separate futures vs options positions
+      const futuresPosition = allPositions.find((p: any) => p.product_id === BTCUSDT_PRODUCT_ID && p.size !== 0);
+      const activePosition = futuresPosition ? {
+        side: futuresPosition.size > 0 ? 'LONG' : 'SHORT',
+        size: Math.abs(futuresPosition.size),
+        entryPrice: Number(futuresPosition.entry_price) || null,
+        unrealizedPnl: Number(futuresPosition.unrealized_pnl) || null,
+      } : null;
+
+      const hasOpenOptions = allPositions.some((p: any) =>
+        (p.contract_type === 'call_options' || p.contract_type === 'put_options') && p.size !== 0
+      );
 
       // 2. Hysteresis Check
       if (signal.overallSignal === lastSignal) {
@@ -96,7 +99,11 @@ async function mainLoop() {
         lastSignal = signal.overallSignal;
       }
 
-      logger.info({ signal: signal.overallSignal, score: signal.score, consecutive: consecutiveSignalCount, price: currentPrice }, 'Tick');
+      logger.info({
+        signal: signal.overallSignal, score: signal.score,
+        consecutive: consecutiveSignalCount, price: currentPrice,
+        hasFutures: !!activePosition, hasOptions: hasOpenOptions, isHedged,
+      }, 'Tick');
 
       if (consecutiveSignalCount < 3) {
         await sleep(15000);
@@ -106,54 +113,92 @@ async function mainLoop() {
       // 3. Evaluate Risk
       const decision = shouldTrade(signal, DEFAULT_RISK_CONFIG, currentPrice);
 
-      // 4. Handle Open Position Exits
-      if (activePosition) {
-        const shouldCloseLong = activePosition.side === 'LONG' && decision.action === 'SELL';
-        const shouldCloseShort = activePosition.side === 'SHORT' && decision.action === 'BUY';
-
-        if (shouldCloseLong || shouldCloseShort) {
-          if (!config.DRY_RUN) {
-            await closeActivePosition(config, activePosition, `Opposite ${signal.overallSignal} signal`);
-          } else {
-            logger.info({ action: 'CLOSE', side: activePosition.side }, '[DRY RUN] Would close position');
-          }
-        }
-        await sleep(15000);
-        continue;
-      }
-
-      // 5. Handle New Entries
-      const timeSinceLastTrade = Date.now() - lastTradeTime;
-      if (timeSinceLastTrade < DEFAULT_RISK_CONFIG.cooldownMs) {
-        await sleep(15000);
-        continue;
-      }
-
-      if (!canTrade(dailyPnl, DEFAULT_RISK_CONFIG)) {
-        logger.warn('Daily loss limit reached, trading halted');
-        await sleep(60000); // Sleep longer if halted
-        continue;
-      }
-
+      // ---------------------------------------------------------------
+      // 4. HEDGE mode (confidence < 60)
+      // ---------------------------------------------------------------
       if (decision.action === 'HEDGE') {
-        if (!isHedged) {
+        // If we have an open FUTURES position, close it first — we're switching to hedge mode
+        if (activePosition) {
+          logger.info({ side: activePosition.side, size: activePosition.size }, 'Closing futures position before entering hedge mode');
+          if (!config.DRY_RUN) {
+            await closeActivePosition(config, activePosition, 'Switching to options hedge — closing futures');
+          } else {
+            logger.info('[DRY RUN] Would close futures position before hedge');
+          }
+          await sleep(2000); // Brief pause after closing
+        }
+
+        // Now open the hedge if we don't already have one
+        if (!isHedged && !hasOpenOptions) {
           logger.info('Confidence is low. Executing Options Hedge strategy.');
           if (!config.DRY_RUN) {
             const hedgeRes = await executeShortStraddle(config, currentPrice, dailyPnl);
             if (hedgeRes.success) isHedged = true;
           } else {
-            // Also call it in dry run to trigger the greek logging
             await executeShortStraddle(config, currentPrice, dailyPnl);
             isHedged = true;
           }
-        }
-      } else if (decision.action && decision.size > 0) {
-        // If we are currently hedged and we get a strong directional signal, we should probably close the hedge
-        if (isHedged) {
-          logger.info('Strong directional signal received. Closing previous options hedge (simulated for now)');
-          isHedged = false;
+        } else if (hasOpenOptions) {
+          // We already have option positions open, mark as hedged
+          isHedged = true;
         }
 
+      // ---------------------------------------------------------------
+      // 5. DIRECTIONAL mode (BUY / SELL)
+      // ---------------------------------------------------------------
+      } else if (decision.action && decision.size > 0) {
+
+        // 5a. Close any open OPTIONS hedge first
+        if (isHedged || hasOpenOptions) {
+          logger.info('Strong directional signal received. Closing options hedge before entering futures trade.');
+          if (!config.DRY_RUN) {
+            await closeOptionsHedge(config);
+          } else {
+            logger.info('[DRY RUN] Would close options hedge');
+          }
+          isHedged = false;
+          await sleep(2000); // Brief pause after closing
+        }
+
+        // 5b. Close any opposing FUTURES position first
+        if (activePosition) {
+          const isOpposite =
+            (activePosition.side === 'LONG' && decision.action === 'SELL') ||
+            (activePosition.side === 'SHORT' && decision.action === 'BUY');
+          const isSameDirection =
+            (activePosition.side === 'LONG' && decision.action === 'BUY') ||
+            (activePosition.side === 'SHORT' && decision.action === 'SELL');
+
+          if (isOpposite) {
+            logger.info({ currentSide: activePosition.side, newAction: decision.action }, 'Closing opposing futures position before new entry');
+            if (!config.DRY_RUN) {
+              await closeActivePosition(config, activePosition, `Opposite signal: ${decision.action}`);
+            } else {
+              logger.info('[DRY RUN] Would close opposing futures position');
+            }
+            await sleep(2000);
+          } else if (isSameDirection) {
+            logger.info({ side: activePosition.side }, 'Already have a position in the same direction, skipping new entry');
+            await sleep(15000);
+            continue;
+          }
+        }
+
+        // 5c. Cooldown check
+        const timeSinceLastTrade = Date.now() - lastTradeTime;
+        if (timeSinceLastTrade < DEFAULT_RISK_CONFIG.cooldownMs) {
+          await sleep(15000);
+          continue;
+        }
+
+        // 5d. Daily loss check
+        if (!canTrade(dailyPnl, DEFAULT_RISK_CONFIG)) {
+          logger.warn('Daily loss limit reached, trading halted');
+          await sleep(60000);
+          continue;
+        }
+
+        // 5e. Execute the new futures trade
         if (!config.DRY_RUN) {
           await executeTrade(config, decision.action, decision.size);
         } else {

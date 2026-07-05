@@ -1,4 +1,4 @@
-import { getProducts, getTickers, placeDeltaOrder } from './delta.js';
+import { getProducts, getTickers, placeDeltaOrder, getAllPositions } from './delta.js';
 import { logger } from './logger.js';
 import type { Config } from './config/index.js';
 
@@ -141,4 +141,57 @@ export async function executeShortStraddle(config: Config, currentPrice: number,
 
   logger.info('Successfully opened Delta-Neutral Short Straddle');
   return { success: true, callRes, putRes, callProduct: straddle.call, putProduct: straddle.put };
+}
+
+/**
+ * Closes all open BTC option positions by placing reduce-only market orders.
+ */
+export async function closeOptionsHedge(config: Config): Promise<boolean> {
+  logger.info('Closing all open BTC option positions...');
+
+  const posRes = await getAllPositions(config.DELTA_API_KEY, config.DELTA_API_SECRET);
+  if (!posRes.success || !Array.isArray(posRes.result)) {
+    logger.error({ error: posRes.error }, 'Failed to fetch positions for hedge closure');
+    return false;
+  }
+
+  const optionPositions = (posRes.result as any[]).filter(
+    (p: any) => (p.contract_type === 'call_options' || p.contract_type === 'put_options') && p.size !== 0
+  );
+
+  if (optionPositions.length === 0) {
+    logger.info('No open option positions to close.');
+    return true;
+  }
+
+  let allClosed = true;
+  for (const pos of optionPositions) {
+    const closeSide = pos.size > 0 ? 'sell' : 'buy';
+    const closeSize = Math.abs(pos.size);
+    logger.info({ symbol: pos.product_symbol || pos.product_id, side: closeSide, size: closeSize }, 'Closing option position');
+
+    if (config.DRY_RUN) {
+      logger.info('[DRY RUN] Would close option position');
+      continue;
+    }
+
+    const res = await placeDeltaOrder(
+      config.DELTA_API_KEY,
+      config.DELTA_API_SECRET,
+      pos.product_id,
+      closeSize,
+      closeSide,
+      'market',
+      undefined,
+      { reduceOnly: true }
+    );
+    if (!res.success) {
+      logger.error({ productId: pos.product_id, error: res.error }, 'Failed to close option position');
+      allClosed = false;
+    } else {
+      logger.info({ productId: pos.product_id }, 'Option position closed successfully');
+    }
+  }
+
+  return allClosed;
 }
