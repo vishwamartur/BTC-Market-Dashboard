@@ -1,6 +1,6 @@
 import { loadConfig } from './config/index.js';
 import { fetchSignal, fetchMarketPrice } from './signalFetcher.js';
-import { getAllPositions, placeLimitOrderWithRetry } from './delta.js';
+import { getAllPositions, placeLimitOrderWithRetry, getDeltaWalletBalances } from './delta.js';
 import { shouldTrade, canTrade, DEFAULT_RISK_CONFIG } from './riskManager.js';
 import { logger } from './logger.js';
 import { executeShortStraddle, closeOptionsHedge } from './optionsManager.js';
@@ -16,6 +16,53 @@ let isHedged = false;
 
 async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// Balance-Aware Dynamic Position Sizing
+// ---------------------------------------------------------------------------
+
+const BALANCE_RISK_CONFIG = {
+  futuresRiskPct: 0.05,    // Risk 5% of available balance per futures trade
+  hedgeRiskPct: 0.15,      // Use 15% of available balance for options hedge
+  contractSizeBtc: 0.001,  // 1 contract = 0.001 BTC on Delta
+  minFuturesContracts: 10,
+  maxFuturesContracts: 100,
+  minHedgeContracts: 10,
+  maxHedgeContracts: 500,
+};
+
+async function fetchAvailableBalance(config: any): Promise<number> {
+  const res = await getDeltaWalletBalances(config.DELTA_API_KEY, config.DELTA_API_SECRET);
+  if (!res.success || !Array.isArray(res.result)) return 0;
+  const usdWallet = (res.result as any[]).find((b: any) => 
+    (b.asset_symbol === 'USD' || b.asset_symbol === 'USDT') && Number(b.available_balance) > 0
+  );
+  return usdWallet ? Number(usdWallet.available_balance) : 0;
+}
+
+function calculateBalanceBasedSize(
+  availableBalance: number,
+  currentPrice: number,
+  riskPct: number,
+  minContracts: number,
+  maxContracts: number,
+  confidence: number = 60
+): number {
+  if (availableBalance <= 0 || currentPrice <= 0) return minContracts;
+
+  // How much USD to risk on this trade
+  const riskUsd = availableBalance * riskPct;
+
+  // Scale by confidence (higher confidence → closer to full risk allocation)
+  const confidenceScale = Math.max(0.5, confidence / 100);
+  const adjustedRiskUsd = riskUsd * confidenceScale;
+
+  // Convert USD to contracts: riskUsd / (contractSize * price)
+  const contractValueUsd = BALANCE_RISK_CONFIG.contractSizeBtc * currentPrice;
+  const contracts = Math.round(adjustedRiskUsd / contractValueUsd);
+
+  return Math.max(minContracts, Math.min(contracts, maxContracts));
 }
 
 
@@ -72,6 +119,7 @@ async function mainLoop() {
       // 1. Fetch data
       const signal = await fetchSignal(config);
       const currentPrice = await fetchMarketPrice(config);
+      const availableBalance = await fetchAvailableBalance(config);
       
       // Fetch ALL BTC positions (futures + options)
       const allPosRes = await getAllPositions(config.DELTA_API_KEY, config.DELTA_API_SECRET);
@@ -115,6 +163,7 @@ async function mainLoop() {
         signal: signal.overallSignal, score: signal.score,
         consecutive: consecutiveSignalCount, price: currentPrice,
         hasFutures: !!activePosition, hasOptions: hasOpenOptions, isHedged,
+        availableBalance: availableBalance.toFixed(2),
       }, 'Tick');
 
       if (consecutiveSignalCount < 3) {
@@ -142,12 +191,19 @@ async function mainLoop() {
 
         // Now open the hedge if we don't already have one
         if (!isHedged) {
-          logger.info('Confidence is low. Executing Options Hedge strategy.');
+          const hedgeSize = calculateBalanceBasedSize(
+            availableBalance, currentPrice,
+            BALANCE_RISK_CONFIG.hedgeRiskPct,
+            BALANCE_RISK_CONFIG.minHedgeContracts,
+            BALANCE_RISK_CONFIG.maxHedgeContracts,
+            signal.confidence
+          );
+          logger.info({ hedgeSize, availableBalance: availableBalance.toFixed(2) }, 'Confidence is low. Executing Options Hedge strategy.');
           if (!config.DRY_RUN) {
-            const hedgeRes = await executeShortStraddle(config, currentPrice, dailyPnl);
+            const hedgeRes = await executeShortStraddle(config, currentPrice, dailyPnl, hedgeSize);
             if (hedgeRes.success) isHedged = true;
           } else {
-            await executeShortStraddle(config, currentPrice, dailyPnl);
+            await executeShortStraddle(config, currentPrice, dailyPnl, hedgeSize);
             isHedged = true;
           }
         }
@@ -207,11 +263,18 @@ async function mainLoop() {
           continue;
         }
 
-        // 5e. Execute the new futures trade
+        // 5e. Execute the new futures trade with balance-based sizing
+        const futuresSize = calculateBalanceBasedSize(
+          availableBalance, currentPrice,
+          BALANCE_RISK_CONFIG.futuresRiskPct,
+          BALANCE_RISK_CONFIG.minFuturesContracts,
+          BALANCE_RISK_CONFIG.maxFuturesContracts,
+          signal.confidence
+        );
         if (!config.DRY_RUN) {
-          await executeTrade(config, decision.action, decision.size);
+          await executeTrade(config, decision.action, futuresSize);
         } else {
-          logger.info({ action: decision.action, size: decision.size }, '[DRY RUN] Would execute entry');
+          logger.info({ action: decision.action, size: futuresSize, availableBalance: availableBalance.toFixed(2) }, '[DRY RUN] Would execute entry');
         }
       }
 

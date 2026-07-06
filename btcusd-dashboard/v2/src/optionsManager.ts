@@ -91,7 +91,7 @@ function calculateDynamicSize(dailyPnl: number, callTicker: any, putTicker: any)
   return finalSize;
 }
 
-export async function executeShortStraddle(config: Config, currentPrice: number, dailyPnl: number = 0) {
+export async function executeShortStraddle(config: Config, currentPrice: number, dailyPnl: number = 0, overrideSize?: number) {
   logger.info({ price: currentPrice }, 'Setting up Delta-Neutral Short Straddle');
   
   const straddle = await findAtTheMoneyStraddle(config, currentPrice);
@@ -106,8 +106,10 @@ export async function executeShortStraddle(config: Config, currentPrice: number,
   const callTicker = callTickerRes.success && Array.isArray(callTickerRes.result) ? callTickerRes.result[0] : null;
   const putTicker = putTickerRes.success && Array.isArray(putTickerRes.result) ? putTickerRes.result[0] : null;
 
-  const dynamicSize = calculateDynamicSize(dailyPnl, callTicker, putTicker);
-  logger.info({ dailyPnl, dynamicSize, callTheta: callTicker?.greeks?.theta, putTheta: putTicker?.greeks?.theta }, 'Calculated dynamic position size');
+  // Use balance-based override if provided, otherwise fall back to Greek-based calculation
+  const greekSize = calculateDynamicSize(dailyPnl, callTicker, putTicker);
+  const dynamicSize = overrideSize ? Math.min(overrideSize, greekSize * 3) : greekSize;
+  logger.info({ dailyPnl, greekSize, overrideSize, finalSize: dynamicSize, callTheta: callTicker?.greeks?.theta, putTheta: putTicker?.greeks?.theta }, 'Calculated dynamic position size');
 
   if (config.DRY_RUN) {
     logger.info({ action: 'SELL', size: dynamicSize }, '[DRY RUN] Would SELL ATM Call and SELL ATM Put to collect premium.');
