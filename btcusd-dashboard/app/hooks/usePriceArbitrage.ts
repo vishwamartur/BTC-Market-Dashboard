@@ -257,6 +257,10 @@ export function usePriceArbitrage() {
         }
 
         // --- Trading Logic ---
+        // PERMANENTLY DISABLED: Arb strategy is structurally unprofitable
+        // due to 2s polling latency, 0.10% round-trip fees, and timeout exits.
+        // The v2 standalone bot's options hedging strategy is the replacement.
+        if (true) return; // kill switch
         if (!isEnabled || isExecutingRef.current) return;
         if (!data.prices.consensus || !data.prices.delta) return;
 

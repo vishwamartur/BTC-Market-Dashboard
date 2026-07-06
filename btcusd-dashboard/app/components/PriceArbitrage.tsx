@@ -14,6 +14,10 @@ export default function PriceArbitrage() {
     logs
   } = usePriceArbitrage();
 
+  // Permanently disabled — arb strategy is structurally unprofitable
+  // due to latency, fees, and timeout exits. Use v2 bot options hedging instead.
+  const isDisabled = true;
+
   const isOpportunity = Math.abs(spreadPct) >= DEFAULT_ARB_CONFIG.entryThresholdPct;
 
   return (
@@ -43,7 +47,9 @@ export default function PriceArbitrage() {
             LIVE
           </div>
           <button
-            onClick={() => setIsEnabled(!isEnabled)}
+            onClick={() => !isDisabled && setIsEnabled(!isEnabled)}
+            disabled={isDisabled}
+            title={isDisabled ? 'Arb Engine disabled — structurally unprofitable due to latency and fees' : ''}
             style={{
               padding: '6px 16px',
               borderRadius: 'var(--radius-xs)',
