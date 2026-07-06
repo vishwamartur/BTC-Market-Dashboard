@@ -91,6 +91,16 @@ async function mainLoop() {
         (p.contract_type === 'call_options' || p.contract_type === 'put_options') && p.size !== 0
       );
 
+      // ALWAYS sync isHedged from live exchange data — never rely on stale memory
+      if (hasOpenOptions) {
+        isHedged = true;
+      } else {
+        if (isHedged) {
+          logger.info('Options positions expired or were closed externally. Resetting hedge state.');
+        }
+        isHedged = false;
+      }
+
       // 2. Hysteresis Check
       if (signal.overallSignal === lastSignal) {
         consecutiveSignalCount++;
@@ -129,7 +139,7 @@ async function mainLoop() {
         }
 
         // Now open the hedge if we don't already have one
-        if (!isHedged && !hasOpenOptions) {
+        if (!isHedged) {
           logger.info('Confidence is low. Executing Options Hedge strategy.');
           if (!config.DRY_RUN) {
             const hedgeRes = await executeShortStraddle(config, currentPrice, dailyPnl);
@@ -138,9 +148,6 @@ async function mainLoop() {
             await executeShortStraddle(config, currentPrice, dailyPnl);
             isHedged = true;
           }
-        } else if (hasOpenOptions) {
-          // We already have option positions open, mark as hedged
-          isHedged = true;
         }
 
       // ---------------------------------------------------------------
