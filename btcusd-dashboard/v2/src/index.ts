@@ -87,9 +87,12 @@ async function mainLoop() {
         unrealizedPnl: Number(futuresPosition.unrealized_pnl) || null,
       } : null;
 
-      const hasOpenOptions = allPositions.some((p: any) =>
-        (p.contract_type === 'call_options' || p.contract_type === 'put_options') && p.size !== 0
-      );
+      // Detect option positions by symbol prefix (C- = call, P- = put)
+      // The positions API does NOT return contract_type, so we can't rely on it
+      const hasOpenOptions = allPositions.some((p: any) => {
+        const sym = (p.product_symbol || p.symbol || '') as string;
+        return (sym.startsWith('C-') || sym.startsWith('P-')) && p.size !== 0;
+      });
 
       // ALWAYS sync isHedged from live exchange data — never rely on stale memory
       if (hasOpenOptions) {

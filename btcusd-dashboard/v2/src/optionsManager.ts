@@ -156,7 +156,10 @@ export async function closeOptionsHedge(config: Config): Promise<boolean> {
   }
 
   const optionPositions = (posRes.result as any[]).filter(
-    (p: any) => (p.contract_type === 'call_options' || p.contract_type === 'put_options') && p.size !== 0
+    (p: any) => {
+      const sym = (p.product_symbol || p.symbol || '') as string;
+      return (sym.startsWith('C-') || sym.startsWith('P-')) && p.size !== 0;
+    }
   );
 
   if (optionPositions.length === 0) {
