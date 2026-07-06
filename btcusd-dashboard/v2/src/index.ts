@@ -24,12 +24,12 @@ async function sleep(ms: number) {
 
 const BALANCE_RISK_CONFIG = {
   futuresRiskPct: 0.05,    // Risk 5% of available balance per futures trade
-  hedgeRiskPct: 0.15,      // Use 15% of available balance for options hedge
+  hedgeRiskPct: 0.80,      // INCREASED: Use 80% of available balance for options hedge
   contractSizeBtc: 0.001,  // 1 contract = 0.001 BTC on Delta
   minFuturesContracts: 10,
   maxFuturesContracts: 100,
   minHedgeContracts: 10,
-  maxHedgeContracts: 500,
+  maxHedgeContracts: 2000, // INCREASED: Allow up to 2000 contracts for high leverage
 };
 
 async function fetchAvailableBalance(config: any): Promise<number> {
