@@ -1,4 +1,4 @@
-import { getProducts, getTickers, placeLimitOrderWithRetry, getAllPositions, setDeltaLeverage } from './delta.js';
+import { getProducts, getTickers, placeLimitOrderWithRetry, getAllPositions } from './delta.js';
 import { logger } from './logger.js';
 import type { Config } from './config/index.js';
 
@@ -108,21 +108,13 @@ export async function executeShortStraddle(config: Config, currentPrice: number,
 
   // Use balance-based override if provided, otherwise fall back to Greek-based calculation
   const greekSize = calculateDynamicSize(dailyPnl, callTicker, putTicker);
-  // With higher leverage and risk allocation, we allow the override size to be used directly
-  const dynamicSize = overrideSize ? Math.min(overrideSize, 2000) : greekSize;
+  const dynamicSize = overrideSize ? Math.min(overrideSize, greekSize * 3) : greekSize;
   logger.info({ dailyPnl, greekSize, overrideSize, finalSize: dynamicSize, callTheta: callTicker?.greeks?.theta, putTheta: putTicker?.greeks?.theta }, 'Calculated dynamic position size');
 
   if (config.DRY_RUN) {
     logger.info({ action: 'SELL', size: dynamicSize }, '[DRY RUN] Would SELL ATM Call and SELL ATM Put to collect premium.');
     return { success: true, dryRun: true };
   }
-
-  // Set Leverage to 10x for options to allow much larger quantities
-  logger.info('Increasing leverage to 10x for options products');
-  await Promise.all([
-    setDeltaLeverage(config.DELTA_API_KEY, config.DELTA_API_SECRET, straddle.call.id, 10),
-    setDeltaLeverage(config.DELTA_API_KEY, config.DELTA_API_SECRET, straddle.put.id, 10)
-  ]).catch(err => logger.warn({ error: err }, 'Failed to set leverage, continuing anyway'));
 
   // Sell Call via LIMIT order
   const callRes = await placeLimitOrderWithRetry(

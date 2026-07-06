@@ -4,6 +4,7 @@ import { getAllPositions, placeLimitOrderWithRetry, getDeltaWalletBalances } fro
 import { shouldTrade, canTrade, DEFAULT_RISK_CONFIG } from './riskManager.js';
 import { logger } from './logger.js';
 import { executeShortStraddle, closeOptionsHedge } from './optionsManager.js';
+import { manageFundingArbitrage } from './fundingArbitrage.js';
 
 const BTCUSDT_PRODUCT_ID = 27;
 
@@ -24,12 +25,12 @@ async function sleep(ms: number) {
 
 const BALANCE_RISK_CONFIG = {
   futuresRiskPct: 0.05,    // Risk 5% of available balance per futures trade
-  hedgeRiskPct: 0.80,      // INCREASED: Use 80% of available balance for options hedge
+  hedgeRiskPct: 0.15,      // Use 15% of available balance for options hedge
   contractSizeBtc: 0.001,  // 1 contract = 0.001 BTC on Delta
   minFuturesContracts: 10,
   maxFuturesContracts: 100,
   minHedgeContracts: 10,
-  maxHedgeContracts: 2000, // INCREASED: Allow up to 2000 contracts for high leverage
+  maxHedgeContracts: 500,
 };
 
 async function fetchAvailableBalance(config: any): Promise<number> {
@@ -175,108 +176,19 @@ async function mainLoop() {
       const decision = shouldTrade(signal, DEFAULT_RISK_CONFIG, currentPrice);
 
       // ---------------------------------------------------------------
-      // 4. HEDGE mode (confidence < 60)
+      // 4. FUNDING ARBITRAGE (CASH & CARRY) MODE
       // ---------------------------------------------------------------
-      if (decision.action === 'HEDGE') {
-        // If we have an open FUTURES position, close it first — we're switching to hedge mode
-        if (activePosition) {
-          logger.info({ side: activePosition.side, size: activePosition.size }, 'Closing futures position before entering hedge mode');
-          if (!config.DRY_RUN) {
-            await closeActivePosition(config, activePosition, 'Switching to options hedge — closing futures');
-          } else {
-            logger.info('[DRY RUN] Would close futures position before hedge');
-          }
-          await sleep(2000); // Brief pause after closing
-        }
+      // We calculate a unified balance-based size for the legs of the cash and carry.
+      // E.g. risk 10% of available balance per leg.
+      const arbSize = calculateBalanceBasedSize(
+        availableBalance, currentPrice,
+        0.10, // 10% risk per leg
+        BALANCE_RISK_CONFIG.minFuturesContracts,
+        BALANCE_RISK_CONFIG.maxFuturesContracts,
+        100 // Full confidence for arbitrage
+      );
 
-        // Now open the hedge if we don't already have one
-        if (!isHedged) {
-          const hedgeSize = calculateBalanceBasedSize(
-            availableBalance, currentPrice,
-            BALANCE_RISK_CONFIG.hedgeRiskPct,
-            BALANCE_RISK_CONFIG.minHedgeContracts,
-            BALANCE_RISK_CONFIG.maxHedgeContracts,
-            signal.confidence
-          );
-          logger.info({ hedgeSize, availableBalance: availableBalance.toFixed(2) }, 'Confidence is low. Executing Options Hedge strategy.');
-          if (!config.DRY_RUN) {
-            const hedgeRes = await executeShortStraddle(config, currentPrice, dailyPnl, hedgeSize);
-            if (hedgeRes.success) isHedged = true;
-          } else {
-            await executeShortStraddle(config, currentPrice, dailyPnl, hedgeSize);
-            isHedged = true;
-          }
-        }
-
-      // ---------------------------------------------------------------
-      // 5. DIRECTIONAL mode (BUY / SELL)
-      // ---------------------------------------------------------------
-      } else if (decision.action && decision.size > 0) {
-
-        // 5a. Close any open OPTIONS hedge first
-        if (isHedged || hasOpenOptions) {
-          logger.info('Strong directional signal received. Closing options hedge before entering futures trade.');
-          if (!config.DRY_RUN) {
-            await closeOptionsHedge(config);
-          } else {
-            logger.info('[DRY RUN] Would close options hedge');
-          }
-          isHedged = false;
-          await sleep(2000); // Brief pause after closing
-        }
-
-        // 5b. Close any opposing FUTURES position first
-        if (activePosition) {
-          const isOpposite =
-            (activePosition.side === 'LONG' && decision.action === 'SELL') ||
-            (activePosition.side === 'SHORT' && decision.action === 'BUY');
-          const isSameDirection =
-            (activePosition.side === 'LONG' && decision.action === 'BUY') ||
-            (activePosition.side === 'SHORT' && decision.action === 'SELL');
-
-          if (isOpposite) {
-            logger.info({ currentSide: activePosition.side, newAction: decision.action }, 'Closing opposing futures position before new entry');
-            if (!config.DRY_RUN) {
-              await closeActivePosition(config, activePosition, `Opposite signal: ${decision.action}`);
-            } else {
-              logger.info('[DRY RUN] Would close opposing futures position');
-            }
-            await sleep(2000);
-          } else if (isSameDirection) {
-            logger.info({ side: activePosition.side }, 'Already have a position in the same direction, skipping new entry');
-            await sleep(15000);
-            continue;
-          }
-        }
-
-        // 5c. Cooldown check
-        const timeSinceLastTrade = Date.now() - lastTradeTime;
-        if (timeSinceLastTrade < DEFAULT_RISK_CONFIG.cooldownMs) {
-          await sleep(15000);
-          continue;
-        }
-
-        // 5d. Daily loss check
-        if (!canTrade(dailyPnl, DEFAULT_RISK_CONFIG)) {
-          logger.warn('Daily loss limit reached, trading halted');
-          await sleep(60000);
-          continue;
-        }
-
-        // 5e. Execute the new futures trade with balance-based sizing
-        const futuresSize = calculateBalanceBasedSize(
-          availableBalance, currentPrice,
-          BALANCE_RISK_CONFIG.futuresRiskPct,
-          BALANCE_RISK_CONFIG.minFuturesContracts,
-          BALANCE_RISK_CONFIG.maxFuturesContracts,
-          signal.confidence
-        );
-        if (!config.DRY_RUN) {
-          await executeTrade(config, decision.action, futuresSize);
-        } else {
-          logger.info({ action: decision.action, size: futuresSize, availableBalance: availableBalance.toFixed(2) }, '[DRY RUN] Would execute entry');
-        }
-      }
+      await manageFundingArbitrage(config, currentPrice, arbSize);
 
     } catch (err: any) {
       logger.error({ error: err.message }, 'Error in main loop');
