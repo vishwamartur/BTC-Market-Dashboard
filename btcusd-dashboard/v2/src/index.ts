@@ -1,6 +1,6 @@
 import { loadConfig } from './config/index.js';
 import { fetchSignal, fetchMarketPrice } from './signalFetcher.js';
-import { getAllPositions, placeDeltaOrder } from './delta.js';
+import { getAllPositions, placeLimitOrderWithRetry } from './delta.js';
 import { shouldTrade, canTrade, DEFAULT_RISK_CONFIG } from './riskManager.js';
 import { logger } from './logger.js';
 import { executeShortStraddle, closeOptionsHedge } from './optionsManager.js';
@@ -21,16 +21,15 @@ async function sleep(ms: number) {
 
 
 async function closeActivePosition(config: any, position: any, reason: string) {
-  logger.info({ reason, position }, 'Closing active position');
+  logger.info({ reason, position }, 'Closing active position via LIMIT order');
   const action = position.side === 'LONG' ? 'sell' : 'buy';
-  const orderRes = await placeDeltaOrder(
+  const orderRes = await placeLimitOrderWithRetry(
     config.DELTA_API_KEY,
     config.DELTA_API_SECRET,
     BTCUSDT_PRODUCT_ID,
     position.size,
     action,
-    'market',
-    undefined,
+    'BTCUSD',
     { reduceOnly: true }
   );
   if (!orderRes.success) {
@@ -41,15 +40,15 @@ async function closeActivePosition(config: any, position: any, reason: string) {
 }
 
 async function executeTrade(config: any, action: 'BUY' | 'SELL', size: number) {
-  logger.info({ action, size }, 'Executing trade entry');
+  logger.info({ action, size }, 'Executing trade entry via LIMIT order');
   const deltaSide = action === 'BUY' ? 'buy' : 'sell';
-  const orderRes = await placeDeltaOrder(
+  const orderRes = await placeLimitOrderWithRetry(
     config.DELTA_API_KEY,
     config.DELTA_API_SECRET,
     BTCUSDT_PRODUCT_ID,
     size,
     deltaSide,
-    'market'
+    'BTCUSD'
   );
   if (!orderRes.success) {
     logger.error({ error: orderRes.error }, 'Failed to execute trade');

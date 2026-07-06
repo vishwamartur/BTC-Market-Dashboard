@@ -1,4 +1,4 @@
-import { getProducts, getTickers, placeDeltaOrder, getAllPositions } from './delta.js';
+import { getProducts, getTickers, placeLimitOrderWithRetry, getAllPositions } from './delta.js';
 import { logger } from './logger.js';
 import type { Config } from './config/index.js';
 
@@ -114,24 +114,24 @@ export async function executeShortStraddle(config: Config, currentPrice: number,
     return { success: true, dryRun: true };
   }
 
-  // Sell Call
-  const callRes = await placeDeltaOrder(
+  // Sell Call via LIMIT order
+  const callRes = await placeLimitOrderWithRetry(
     config.DELTA_API_KEY,
     config.DELTA_API_SECRET,
     straddle.call.id,
     dynamicSize,
     'sell',
-    'market'
+    straddle.call.symbol,
   );
 
-  // Sell Put
-  const putRes = await placeDeltaOrder(
+  // Sell Put via LIMIT order
+  const putRes = await placeLimitOrderWithRetry(
     config.DELTA_API_KEY,
     config.DELTA_API_SECRET,
     straddle.put.id,
     dynamicSize,
     'sell',
-    'market'
+    straddle.put.symbol,
   );
 
   if (!callRes.success || !putRes.success) {
@@ -144,7 +144,7 @@ export async function executeShortStraddle(config: Config, currentPrice: number,
 }
 
 /**
- * Closes all open BTC option positions by placing reduce-only market orders.
+ * Closes all open BTC option positions by placing reduce-only LIMIT orders.
  */
 export async function closeOptionsHedge(config: Config): Promise<boolean> {
   logger.info('Closing all open BTC option positions...');
@@ -178,15 +178,15 @@ export async function closeOptionsHedge(config: Config): Promise<boolean> {
       continue;
     }
 
-    const res = await placeDeltaOrder(
+    const sym = (pos.product_symbol || pos.symbol || '') as string;
+    const res = await placeLimitOrderWithRetry(
       config.DELTA_API_KEY,
       config.DELTA_API_SECRET,
       pos.product_id,
       closeSize,
       closeSide,
-      'market',
-      undefined,
-      { reduceOnly: true }
+      sym,
+      { reduceOnly: true },
     );
     if (!res.success) {
       logger.error({ productId: pos.product_id, error: res.error }, 'Failed to close option position');

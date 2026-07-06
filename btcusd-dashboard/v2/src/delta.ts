@@ -275,3 +275,106 @@ export async function getTickers(apiKey: string, apiSecret: string, symbol?: str
     retries: 2,
   });
 }
+
+/**
+ * Fetch bid/ask/mark for a given product symbol.
+ */
+export async function getTickerPrice(apiKey: string, apiSecret: string, symbol: string): Promise<{ bid: number; ask: number; mark: number } | null> {
+  const res = await getTickers(apiKey, apiSecret, symbol);
+  if (!res.success) return null;
+  const ticker = Array.isArray(res.result) ? res.result[0] : res.result;
+  if (!ticker) return null;
+  return {
+    bid: Number(ticker.quotes?.best_bid || ticker.mark_price || 0),
+    ask: Number(ticker.quotes?.best_ask || ticker.mark_price || 0),
+    mark: Number(ticker.mark_price || 0),
+  };
+}
+
+/**
+ * Place a limit order at maker-friendly price, wait for fill, retry up to maxRetries.
+ * For BUY: posts at best bid (maker). For SELL: posts at best ask (maker).
+ * If not filled within timeout, cancels and retries with a slightly more aggressive price.
+ */
+export async function placeLimitOrderWithRetry(
+  apiKey: string,
+  apiSecret: string,
+  productId: number,
+  size: number,
+  side: 'buy' | 'sell',
+  tickerSymbol: string,
+  options: PlaceOrderOptions = {},
+  maxRetries: number = 3,
+  fillTimeoutMs: number = 8000,
+): Promise<DeltaOrderResponse> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // 1. Fetch latest bid/ask
+    const ticker = await getTickerPrice(apiKey, apiSecret, tickerSymbol);
+    if (!ticker || ticker.mark === 0) {
+      console.error(`[limitOrder] Failed to fetch ticker for ${tickerSymbol}`);
+      return { success: false, error: { code: 'ticker_fetch_failed', context: null } };
+    }
+
+    // 2. Calculate limit price: post on the book as a maker
+    // Each retry nudges the price slightly toward the spread to increase fill chance
+    const nudgePct = attempt * 0.0001; // 0.01% nudge per retry
+    let limitPrice: number;
+    if (side === 'buy') {
+      limitPrice = ticker.bid * (1 + nudgePct); // bid or slightly above bid
+    } else {
+      limitPrice = ticker.ask * (1 - nudgePct); // ask or slightly below ask
+    }
+    const limitPriceStr = limitPrice.toFixed(1);
+
+    console.log(`[limitOrder] Attempt ${attempt + 1}/${maxRetries}: ${side.toUpperCase()} ${size} @ ${limitPriceStr} (bid=${ticker.bid}, ask=${ticker.ask})`);
+
+    // 3. Place the limit order
+    const orderRes = await placeDeltaOrder(apiKey, apiSecret, productId, size, side, 'limit', limitPriceStr, options);
+    if (!orderRes.success) {
+      return orderRes; // API error, don't retry
+    }
+
+    const orderId = orderRes.result?.id;
+    if (!orderId) {
+      return orderRes;
+    }
+
+    // 4. Poll for fill
+    const startTime = Date.now();
+    while (Date.now() - startTime < fillTimeoutMs) {
+      await new Promise(r => setTimeout(r, 2000));
+      const checkRes = await getOrderById(apiKey, apiSecret, orderId);
+      if (!checkRes.success) continue;
+      const order = checkRes.result as Record<string, unknown>;
+      const state = String(order.state || '');
+
+      if (state === 'closed' || state === 'filled') {
+        console.log(`[limitOrder] Order ${orderId} FILLED @ ${order.average_fill_price || limitPriceStr}`);
+        return {
+          success: true,
+          result: {
+            id: orderId,
+            product_id: productId,
+            size,
+            side,
+            state,
+            average_fill_price: order.average_fill_price,
+          },
+        };
+      }
+      if (state === 'cancelled' || state === 'rejected') {
+        console.log(`[limitOrder] Order ${orderId} ${state}, retrying...`);
+        break;
+      }
+    }
+
+    // 5. Not filled — cancel and retry with more aggressive price
+    console.log(`[limitOrder] Order ${orderId} not filled in ${fillTimeoutMs}ms, cancelling...`);
+    await cancelOrder(apiKey, apiSecret, orderId, productId);
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // All retries exhausted
+  console.error(`[limitOrder] Failed to fill after ${maxRetries} attempts`);
+  return { success: false, error: { code: 'limit_order_not_filled', context: `${maxRetries} attempts exhausted` } };
+}
