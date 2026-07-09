@@ -65,7 +65,7 @@ describe('buildPayoffCurve', () => {
     const { curve, maxProfit, breakevens, strike } = buildPayoffCurve({
       call,
       put,
-      currentPrice: 100000,
+      _currentPrice: 100000,
       gridPoints: 101,
     });
 
@@ -92,7 +92,7 @@ describe('buildPayoffCurve', () => {
     const result = buildPayoffCurve({
       call: null,
       put: null,
-      currentPrice: 100000,
+      _currentPrice: 100000,
       gridPoints: 101,
     });
     assert.equal(result.curve.length, 0);

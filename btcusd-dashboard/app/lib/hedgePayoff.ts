@@ -137,7 +137,7 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-interface RawFill {
+export interface RawFill {
   symbol?: string;
   product_symbol?: string;
   realized_pnl?: string | number;
