@@ -60,7 +60,7 @@ export default function HedgePayoffChart() {
         const res = await fetch('/api/hedge/payoff');
         const json = await res.json();
         if (!res.ok || !json.success) {
-          setError(json.error || 'Failed to fetch hedge payoff data');
+          setError(typeof json.error === 'string' ? json.error : JSON.stringify(json.error) || 'Failed to fetch hedge payoff data');
           return;
         }
         setData(json);

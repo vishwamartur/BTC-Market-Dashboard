@@ -17,6 +17,18 @@ const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
 const CACHE_TTL_MS = 5000;
 let cachedResult: { data: unknown; fetchedAt: number } | null = null;
 
+function errorToString(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const obj = error as Record<string, unknown>;
+    if (typeof obj.code === 'string') return obj.code;
+    if (typeof obj.message === 'string') return obj.message;
+    return JSON.stringify(error);
+  }
+  return 'Unknown error';
+}
+
 interface RawDeltaPosition {
   product_id?: number;
   product_symbol?: string;
@@ -98,14 +110,14 @@ export async function GET() {
 
     if (!positionsRes.success) {
       return NextResponse.json(
-        { success: false, error: positionsRes.error || 'Failed to fetch positions' },
+        { success: false, error: errorToString(positionsRes.error) || 'Failed to fetch positions' },
         { status: 502 },
       );
     }
 
     if (!fillsRes.success) {
       return NextResponse.json(
-        { success: false, error: fillsRes.error || 'Failed to fetch fills' },
+        { success: false, error: errorToString(fillsRes.error) || 'Failed to fetch fills' },
         { status: 502 },
       );
     }
@@ -155,7 +167,7 @@ export async function GET() {
     return NextResponse.json(responseData);
   } catch (error) {
     console.error('[/api/hedge/payoff] error:', error);
-    const message = error instanceof Error ? error.message : 'Failed to calculate hedge payoff';
+    const message = errorToString(error) || 'Failed to calculate hedge payoff';
     return NextResponse.json(
       { success: false, error: message },
       { status: 500 },
