@@ -12,7 +12,7 @@ interface WalletBalance {
   asset_symbol: string;
   balance: string;
   available_balance: string;
-  [key: string]: any;
+  [key: string]: string | number | undefined;
 }
 
 export default function WalletPage() {
@@ -39,9 +39,10 @@ export default function WalletPage() {
           }
           setLoading(false);
         }
-      } catch (err: any) {
+      } catch (err) {
         if (mounted) {
-          setError(err.message || 'An error occurred');
+          const message = err instanceof Error ? err.message : 'An error occurred';
+          setError(message);
           setLoading(false);
         }
       }

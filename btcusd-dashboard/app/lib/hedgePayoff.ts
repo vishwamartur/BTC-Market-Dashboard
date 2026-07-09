@@ -82,6 +82,10 @@ export function buildPayoffCurve({
     return { curve: [], strike: null, maxProfit: null, breakevens: null };
   }
 
+  if (call.side !== 'SHORT' || put.side !== 'SHORT') {
+    return { curve: [], strike: null, maxProfit: null, breakevens: null };
+  }
+
   const strike = callStrike;
   const size = Math.max(call.size, put.size);
   if (size <= 0 || !Number.isFinite(size)) {

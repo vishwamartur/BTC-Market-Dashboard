@@ -55,9 +55,14 @@ function findStraddlePair(positions: OptionPosition[]): {
   call: OptionPosition | null;
   put: OptionPosition | null;
 } {
-  const call = positions.find((p) => p.symbol.startsWith('C-')) || null;
-  const put = positions.find((p) => p.symbol.startsWith('P-')) || null;
-  return { call, put };
+  const calls = positions.filter((p) => p.symbol.startsWith('C-'));
+  const puts = positions.filter((p) => p.symbol.startsWith('P-'));
+  for (const call of calls) {
+    const callStrike = parseOptionStrike(call.symbol);
+    const put = puts.find((p) => parseOptionStrike(p.symbol) === callStrike);
+    if (put) return { call, put };
+  }
+  return { call: null, put: null };
 }
 
 /**
@@ -94,6 +99,13 @@ export async function GET() {
     if (!positionsRes.success) {
       return NextResponse.json(
         { success: false, error: positionsRes.error || 'Failed to fetch positions' },
+        { status: 502 },
+      );
+    }
+
+    if (!fillsRes.success) {
+      return NextResponse.json(
+        { success: false, error: fillsRes.error || 'Failed to fetch fills' },
         { status: 502 },
       );
     }

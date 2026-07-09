@@ -37,7 +37,6 @@ export default function Dashboard() {
     price,
     prevPrice,
     wsStatus,
-    lastUpdate,
     fundingRate,
     priceHistory,
     oiHistory,
