@@ -5,6 +5,7 @@ import Link from 'next/link';
 import ClientIP from '../components/ClientIP';
 import WalletPNLChart from '../components/WalletPNLChart';
 import CostAnalysis from '../components/CostAnalysis';
+import HedgePayoffChart from '../components/HedgePayoffChart';
 
 interface WalletBalance {
   asset_id: number;
@@ -157,6 +158,10 @@ export default function WalletPage() {
 
       <div style={{ marginTop: '24px' }}>
         <WalletPNLChart />
+      </div>
+
+      <div style={{ marginTop: '24px' }}>
+        <HedgePayoffChart />
       </div>
 
       <div style={{ marginTop: '24px' }}>

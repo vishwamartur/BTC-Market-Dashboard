@@ -18,6 +18,7 @@ import AutoTraderControl from './components/AutoTraderControl';
 import PriceArbitrage from './components/PriceArbitrage';
 import LiquidationHeatmap from './components/LiquidationHeatmap';
 import TradePerformance from './components/TradePerformance';
+import HedgePayoffChart from './components/HedgePayoffChart';
 import OIDivergence from './components/OIDivergence';
 import WhaleFlows from './components/WhaleFlows';
 import ClientIP from './components/ClientIP';
@@ -157,6 +158,11 @@ export default function Dashboard() {
           latestBlocks={latestBlocks}
           hashrateData={hashrateData}
         />
+      </div>
+
+      {/* Hedge Payoff Row */}
+      <div className="dashboard-grid" style={{ marginTop: '20px' }}>
+        <HedgePayoffChart />
       </div>
 
       {/* Main Grid: Liquidations & Whales */}
