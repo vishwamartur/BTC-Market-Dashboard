@@ -18,10 +18,12 @@ const CACHE_TTL_MS = 5000;
 let cachedResult: { data: unknown; fetchedAt: number } | null = null;
 
 interface RawDeltaPosition {
+  product_id?: number;
   product_symbol?: string;
   symbol?: string;
   size?: number;
   entry_price?: string;
+  mark_price?: string;
   unrealized_pnl?: string;
   side?: string;
 }
@@ -101,9 +103,9 @@ export async function GET() {
     const { call, put } = findStraddlePair(optionPositions);
 
     // Use current BTC price from positions if available, otherwise a sensible default
-    const btcFutures = rawPositions.find(
-      (p: any) => p.product_id === 27 || (p.product_symbol || p.symbol) === 'BTCUSDT',
-    ) as any;
+    const btcFutures = (rawPositions as RawDeltaPosition[]).find(
+      (p) => p.product_id === 27 || (p.product_symbol || p.symbol) === 'BTCUSDT',
+    );
     const currentPrice = Number(btcFutures?.mark_price || 0);
 
     const payoffResult = buildPayoffCurve({ call, put, _currentPrice: currentPrice });
@@ -139,10 +141,11 @@ export async function GET() {
 
     cachedResult = { data: responseData, fetchedAt: Date.now() };
     return NextResponse.json(responseData);
-  } catch (error: any) {
+  } catch (error) {
     console.error('[/api/hedge/payoff] error:', error);
+    const message = error instanceof Error ? error.message : 'Failed to calculate hedge payoff';
     return NextResponse.json(
-      { success: false, error: error.message || 'Failed to calculate hedge payoff' },
+      { success: false, error: message },
       { status: 500 },
     );
   }

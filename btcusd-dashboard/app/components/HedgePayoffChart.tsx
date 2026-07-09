@@ -65,9 +65,10 @@ export default function HedgePayoffChart() {
         }
         setData(json);
         setError(null);
-      } catch (err: any) {
+      } catch (err) {
         console.error('Hedge payoff fetch error:', err);
-        setError(err.message || 'An error occurred while fetching hedge payoff data.');
+        const message = err instanceof Error ? err.message : 'An error occurred while fetching hedge payoff data.';
+        setError(message);
       } finally {
         setLoading(false);
       }
