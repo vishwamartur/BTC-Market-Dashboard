@@ -376,6 +376,9 @@ export default function HedgePayoffChart() {
         <div className="chart-empty">
           <div style={{ fontSize: '32px', opacity: 0.5 }}>🛡️</div>
           <p>No active hedge or historical option activity found.</p>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>
+            hasHedge={data.hasHedge ? 'true' : 'false'} · price={formatPrice(data.currentPrice)} · history={data.pnlHistory.length}
+          </p>
         </div>
       ) : (
         <>

@@ -48,10 +48,18 @@ function normalizeOptionPositions(rawPositions: unknown[]): OptionPosition[] {
     })
     .map((p) => {
       const sym = p.product_symbol || p.symbol || '';
-      const size = Math.abs(Number(p.size) || 0);
+      const signedSize = Number(p.size) || 0;
+      const size = Math.abs(signedSize);
       const rawSide = String(p.side || '').toLowerCase();
-      const side: OptionPosition['side'] =
-        rawSide.includes('short') || rawSide === 'sell' ? 'SHORT' : 'LONG';
+      let side: OptionPosition['side'];
+      if (rawSide.includes('short') || rawSide === 'sell') {
+        side = 'SHORT';
+      } else if (rawSide.includes('long') || rawSide === 'buy') {
+        side = 'LONG';
+      } else {
+        // Delta may omit `side` and express direction purely through signed size.
+        side = signedSize < 0 ? 'SHORT' : 'LONG';
+      }
       return {
         symbol: sym,
         side,
@@ -126,6 +134,16 @@ export async function GET() {
     const optionPositions = normalizeOptionPositions(rawPositions);
     const { call, put } = findStraddlePair(optionPositions);
 
+    console.log('[hedge/payoff] raw positions count:', rawPositions.length);
+    console.log(
+      '[hedge/payoff] raw option sample:',
+      (rawPositions as RawDeltaPosition[])
+        .filter((p) => isOptionSymbol(p.product_symbol || p.symbol || ''))
+        .slice(0, 5),
+    );
+    console.log('[hedge/payoff] option positions:', optionPositions);
+    console.log('[hedge/payoff] straddle pair:', { call, put });
+
     // Use current BTC price from positions if available, otherwise a sensible default
     const btcFutures = (rawPositions as RawDeltaPosition[]).find(
       (p) => p.product_id === 27 || (p.product_symbol || p.symbol) === 'BTCUSDT',
@@ -133,6 +151,13 @@ export async function GET() {
     const currentPrice = Number(btcFutures?.mark_price || 0);
 
     const payoffResult = buildPayoffCurve({ call, put, _currentPrice: currentPrice });
+
+    console.log('[hedge/payoff] payoff result:', {
+      curvePoints: payoffResult.curve.length,
+      strike: payoffResult.strike,
+      maxProfit: payoffResult.maxProfit,
+      breakevens: payoffResult.breakevens,
+    });
 
     const { history, totalRealizedPnl } = buildPnlHistory(
       Array.isArray(fillsRes?.result) ? fillsRes.result : [],
@@ -167,6 +192,11 @@ export async function GET() {
     return NextResponse.json(responseData);
   } catch (error) {
     console.error('[/api/hedge/payoff] error:', error);
+    console.error('[/api/hedge/payoff] error detail:', {
+      message: errorToString(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      name: error instanceof Error ? error.name : undefined,
+    });
     const message = errorToString(error) || 'Failed to calculate hedge payoff';
     return NextResponse.json(
       { success: false, error: message },
