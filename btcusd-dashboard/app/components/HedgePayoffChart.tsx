@@ -59,6 +59,7 @@ export default function HedgePayoffChart() {
       try {
         const res = await fetch('/api/hedge/payoff');
         const json = await res.json();
+        console.log('[HedgePayoffChart] API response:', json);
         if (!res.ok || !json.success) {
           setError(typeof json.error === 'string' ? json.error : JSON.stringify(json.error) || 'Failed to fetch hedge payoff data');
           return;
@@ -66,7 +67,7 @@ export default function HedgePayoffChart() {
         setData(json);
         setError(null);
       } catch (err) {
-        console.error('Hedge payoff fetch error:', err);
+        console.error('[HedgePayoffChart] fetch error:', err);
         const message = err instanceof Error ? err.message : 'An error occurred while fetching hedge payoff data.';
         setError(message);
       } finally {
@@ -367,6 +368,14 @@ export default function HedgePayoffChart() {
         </div>
       )}
 
+      {data && (
+        <div style={{ marginBottom: '16px', padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: 'var(--radius-xs)', border: '1px solid rgba(255,255,255,0.05)', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
+          <div>success={String(data.success)} hasHedge={String(data.hasHedge)} price={data.currentPrice} strike={data.strike ?? 'null'} curve={data.payoffCurve.length} history={data.pnlHistory.length}</div>
+          <div>call={data.metadata.callSymbol ?? 'none'} put={data.metadata.putSymbol ?? 'none'} size={data.metadata.size ?? 'none'}</div>
+          {data.error && <div style={{ color: 'var(--red)' }}>error={data.error}</div>}
+        </div>
+      )}
+
       {loading && !data ? (
         <div className="chart-empty">
           <div style={{ fontSize: '32px', opacity: 0.5 }}>🛡️</div>
@@ -376,6 +385,9 @@ export default function HedgePayoffChart() {
         <div className="chart-empty">
           <div style={{ fontSize: '32px', opacity: 0.5 }}>🛡️</div>
           <p>No active hedge or historical option activity found.</p>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>
+            Open option positions must have a symbol starting with <code>C-</code> or <code>P-</code>. Check the server console and the debug panel above for the raw API values.
+          </p>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>
             hasHedge={data.hasHedge ? 'true' : 'false'} · price={formatPrice(data.currentPrice)} · history={data.pnlHistory.length}
           </p>
