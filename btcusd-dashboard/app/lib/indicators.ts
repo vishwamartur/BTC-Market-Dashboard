@@ -188,3 +188,128 @@ export function priceMomentumScore(prices: number[]): number {
 
   return Math.max(-1, Math.min(1, score));
 }
+
+/**
+ * Least-squares linear regression slope over the full price array.
+ * x = index, y = price. Returns 0 if there are fewer than 2 points.
+ */
+export function calcLinearRegressionSlope(prices: number[]): number {
+  const n = prices.length;
+  if (n < 2) return 0;
+
+  // x_i = i for i in 0..n-1; sum(x) = n(n-1)/2, sum(x^2) = (n-1)n(2n-1)/6
+  let sumY = 0;
+  for (let i = 0; i < n; i++) sumY += prices[i];
+
+  const meanX = (n - 1) / 2;
+  const meanY = sumY / n;
+
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = i - meanX;
+    const dy = prices[i] - meanY;
+    num += dx * dy;
+    den += dx * dx;
+  }
+
+  if (den === 0) return 0;
+  return num / den;
+}
+
+/**
+ * Fractional-change slope of the EMA line over the last `period` points.
+ * Computed as (ema[last] - ema[first]) / ema[first], where "first" is the
+ * earliest of the last `period` EMA values and "last" is the most recent.
+ * Returns 0 if there are not enough prices to compute the EMA.
+ */
+export function calcEMASlope(prices: number[], period: number): number {
+  if (prices.length < period || period < 2) return 0;
+
+  const ema = calcEMA(prices, period);
+  const first = ema[ema.length - period];
+  const last = ema[ema.length - 1];
+
+  if (!isFinite(first) || first === 0) return 0;
+  return (last - first) / first;
+}
+
+/**
+ * Donchian channels: rolling high (upper) and low (lower) over `period` bars.
+ * Indices before a full window is available are filled with NaN, matching the
+ * convention used by calcSMA / calcBollingerBands in this module.
+ */
+export function calcDonchianChannels(
+  prices: number[],
+  period: number
+): { upper: number[]; lower: number[] } {
+  const upper: number[] = [];
+  const lower: number[] = [];
+
+  for (let i = 0; i < prices.length; i++) {
+    if (i < period - 1) {
+      upper.push(NaN);
+      lower.push(NaN);
+    } else {
+      let hi = -Infinity;
+      let lo = Infinity;
+      for (let j = i - period + 1; j <= i; j++) {
+        if (prices[j] > hi) hi = prices[j];
+        if (prices[j] < lo) lo = prices[j];
+      }
+      upper.push(hi);
+      lower.push(lo);
+    }
+  }
+
+  return { upper, lower };
+}
+
+/**
+ * Bollinger bandwidth = (upper - lower) / middle, expressed as a fraction.
+ * Returns 0 for any index where the underlying Bollinger Bands are undefined
+ * (insufficient data, non-finite middle, or middle == 0).
+ */
+export function calcBollingerBandwidth(
+  prices: number[],
+  period: number = 20,
+  stddev: number = 2
+): number[] {
+  const { upper, middle, lower } = calcBollingerBands(prices, period, stddev);
+  const bw: number[] = [];
+
+  for (let i = 0; i < prices.length; i++) {
+    const m = middle[i];
+    if (!isFinite(m) || m === 0) {
+      bw.push(0);
+    } else {
+      bw.push((upper[i] - lower[i]) / m);
+    }
+  }
+
+  return bw;
+}
+
+export type MarketRegime = 'trending' | 'ranging' | 'choppy';
+
+/**
+ * Classify recent price action as trending, ranging, or choppy.
+ *
+ * Uses linear-regression slope (directional persistence) and Bollinger
+ * bandwidth (volatility contraction). tuned for BTCUSD 5-second snapshots.
+ */
+export function detectMarketRegime(prices: number[], period: number = 20): MarketRegime {
+  if (prices.length < period) return 'choppy';
+
+  const slice = prices.slice(-period);
+  const lrSlope = calcLinearRegressionSlope(slice);
+  const bandwidthSeries = calcBollingerBandwidth(slice, period, 2);
+  const bandwidth = bandwidthSeries[bandwidthSeries.length - 1];
+
+  const currentPrice = slice[slice.length - 1];
+  const slopePct = currentPrice > 0 ? Math.abs(lrSlope) / currentPrice : 0;
+
+  if (slopePct > 0.002 && bandwidth > 0.015) return 'trending';
+  if (slopePct < 0.001 && bandwidth < 0.015) return 'ranging';
+  return 'choppy';
+}

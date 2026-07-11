@@ -7,7 +7,7 @@ export interface BlockchainTxInput {
     addr: string;
     n: number;
     script: string;
-    spending_outpoints: any[];
+    spending_outpoints: unknown[];
     spent: boolean;
     tx_index: number;
     type: number;
@@ -19,7 +19,7 @@ export interface BlockchainTxOutput {
   type: number;
   spent: boolean;
   value: number; // in satoshis
-  spending_outpoints: any[];
+  spending_outpoints: unknown[];
   n: number;
   tx_index: number;
   script: string;
@@ -61,7 +61,7 @@ export interface WhaleTransaction {
 export const BLOCKCHAIN_API_BASE = 'https://blockchain.info';
 
 export async function fetchUnconfirmedTransactions(): Promise<UnconfirmedTransactionsResponse> {
-  const res = await fetch(`${BLOCKCHAIN_API_BASE}/unconfirmed-transactions?format=json`);
+  const res = await resilientFetch(`${BLOCKCHAIN_API_BASE}/unconfirmed-transactions?format=json`, { retries: 1, timeoutMs: 8000 });
   if (res.status === 429) {
     throw new Error('Rate limited by blockchain.info (429)');
   }
@@ -115,3 +115,4 @@ export function classifyWhaleTransaction(tx: BlockchainTx, btcPrice: number): Wh
     type,
   };
 }
+import { resilientFetch } from './resilientFetch';

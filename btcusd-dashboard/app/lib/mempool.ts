@@ -45,25 +45,26 @@ export interface HashrateData {
 export const MEMPOOL_API_BASE = 'https://mempool.space/api';
 
 export async function fetchMempoolStats(): Promise<MempoolStats> {
-  const res = await fetch(`${MEMPOOL_API_BASE}/mempool`);
+  const res = await resilientFetch(`${MEMPOOL_API_BASE}/mempool`, { retries: 1, timeoutMs: 8000 });
   if (!res.ok) throw new Error('Failed to fetch mempool stats');
   return res.json();
 }
 
 export async function fetchMempoolFees(): Promise<MempoolFees> {
-  const res = await fetch(`${MEMPOOL_API_BASE}/v1/fees/recommended`);
+  const res = await resilientFetch(`${MEMPOOL_API_BASE}/v1/fees/recommended`, { retries: 1, timeoutMs: 8000 });
   if (!res.ok) throw new Error('Failed to fetch mempool fees');
   return res.json();
 }
 
 export async function fetchLatestBlocks(): Promise<BlockData[]> {
-  const res = await fetch(`${MEMPOOL_API_BASE}/v1/blocks`);
+  const res = await resilientFetch(`${MEMPOOL_API_BASE}/v1/blocks`, { retries: 1, timeoutMs: 8000 });
   if (!res.ok) throw new Error('Failed to fetch latest blocks');
   return res.json();
 }
 
 export async function fetchHashrate(): Promise<HashrateData> {
-  const res = await fetch(`${MEMPOOL_API_BASE}/v1/mining/hashrate/3d`);
+  const res = await resilientFetch(`${MEMPOOL_API_BASE}/v1/mining/hashrate/3d`, { retries: 1, timeoutMs: 8000 });
   if (!res.ok) throw new Error('Failed to fetch hashrate');
   return res.json();
 }
+import { resilientFetch } from './resilientFetch';

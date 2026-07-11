@@ -24,6 +24,10 @@ export interface OnChainSnapshot {
   hashrateData: HashrateData | null;
   hashrateTrend: 'UP' | 'DOWN' | 'FLAT' | null;
   whaleTransactions: WhaleTransaction[];
+  /** Independent update times prevent one healthy feed masking another stale feed. */
+  mempoolTimestamp: number;
+  hashrateTimestamp: number;
+  whaleTimestamp: number;
   timestamp: number;
 }
 
@@ -31,6 +35,8 @@ class OnChainCache {
   private started = false;
   private mempoolTimerId: ReturnType<typeof setInterval> | null = null;
   private blockchainTimerId: ReturnType<typeof setInterval> | null = null;
+  private mempoolInFlight: Promise<void> | null = null;
+  private blockchainInFlight: Promise<void> | null = null;
 
   // Cached data
   private mempoolStats: MempoolStats | null = null;
@@ -38,6 +44,9 @@ class OnChainCache {
   private hashrateData: HashrateData | null = null;
   private hashrateTrend: 'UP' | 'DOWN' | 'FLAT' | null = null;
   private whaleTransactions: WhaleTransaction[] = [];
+  private mempoolTimestamp = 0;
+  private hashrateTimestamp = 0;
+  private whaleTimestamp = 0;
   private lastTimestamp = 0;
 
   // Rate-limit protection for blockchain.info
@@ -60,6 +69,9 @@ class OnChainCache {
       hashrateData: this.hashrateData,
       hashrateTrend: this.hashrateTrend,
       whaleTransactions: this.whaleTransactions,
+      mempoolTimestamp: this.mempoolTimestamp,
+      hashrateTimestamp: this.hashrateTimestamp,
+      whaleTimestamp: this.whaleTimestamp,
       timestamp: this.lastTimestamp,
     };
   }
@@ -98,26 +110,39 @@ class OnChainCache {
    * This API has generous rate limits.
    */
   private async fetchMempoolData(): Promise<void> {
-    const [statsRes, feesRes, hashrateRes] = await Promise.allSettled([
-      fetchMempoolStats(),
-      fetchMempoolFees(),
-      fetchHashrate(),
-    ]);
+    if (this.mempoolInFlight) return this.mempoolInFlight;
 
-    if (statsRes.status === 'fulfilled') {
-      this.mempoolStats = statsRes.value;
-    }
+    this.mempoolInFlight = (async () => {
+      const [statsRes, feesRes, hashrateRes] = await Promise.allSettled([
+        fetchMempoolStats(),
+        fetchMempoolFees(),
+        fetchHashrate(),
+      ]);
 
-    if (feesRes.status === 'fulfilled') {
-      this.mempoolFees = feesRes.value;
-    }
+      const fetchedAt = Date.now();
 
-    if (hashrateRes.status === 'fulfilled') {
-      this.hashrateData = hashrateRes.value;
-      this.hashrateTrend = this.computeHashrateTrend(hashrateRes.value);
-    }
+      if (statsRes.status === 'fulfilled') {
+        this.mempoolStats = statsRes.value;
+        this.mempoolTimestamp = fetchedAt;
+      }
 
-    this.lastTimestamp = Date.now();
+      if (feesRes.status === 'fulfilled') {
+        this.mempoolFees = feesRes.value;
+        this.mempoolTimestamp = fetchedAt;
+      }
+
+      if (hashrateRes.status === 'fulfilled') {
+        this.hashrateData = hashrateRes.value;
+        this.hashrateTrend = this.computeHashrateTrend(hashrateRes.value);
+        this.hashrateTimestamp = fetchedAt;
+      }
+
+      this.lastTimestamp = fetchedAt;
+    })().finally(() => {
+      this.mempoolInFlight = null;
+    });
+
+    return this.mempoolInFlight;
   }
 
   /**
@@ -125,6 +150,15 @@ class OnChainCache {
    * This API rate-limits aggressively — includes backoff logic.
    */
   private async fetchBlockchainData(): Promise<void> {
+    if (this.blockchainInFlight) return this.blockchainInFlight;
+
+    this.blockchainInFlight = this.fetchBlockchainDataInternal().finally(() => {
+      this.blockchainInFlight = null;
+    });
+    return this.blockchainInFlight;
+  }
+
+  private async fetchBlockchainDataInternal(): Promise<void> {
     // Respect backoff
     if (Date.now() < this.blockchainNextAllowed) {
       return;
@@ -163,7 +197,9 @@ class OnChainCache {
         }
       }
 
-      this.lastTimestamp = Date.now();
+      const fetchedAt = Date.now();
+      this.whaleTimestamp = fetchedAt;
+      this.lastTimestamp = fetchedAt;
     } catch (err: unknown) {
       // Handle rate limiting with exponential backoff
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -212,9 +248,7 @@ class OnChainCache {
 // Global singleton (survives Next.js hot reloads)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-namespace
 declare global {
-  // eslint-disable-next-line no-var
   var _onChainCache: OnChainCache | undefined;
 }
 

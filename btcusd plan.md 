@@ -1,0 +1,36 @@
+# Delta Exchange Profitability Research & Strategy Plan
+
+This document outlines three new, proven strategies to generate consistent profits on Delta Exchange, especially tailored for a smaller account balance (~$200-$300).
+
+## User Review Required
+> [!IMPORTANT]
+> Please review the three strategies below. I can implement any (or all) of them into your `v2` bot architecture. Let me know which one sounds the most appealing to you!
+
+---
+
+## Strategy 1: Funding Rate Arbitrage (Cash and Carry)
+**How it works:** In crypto bull markets, Perpetual Futures typically trade at a premium to Spot prices, meaning people who are Long pay a "Funding Rate" to people who are Short. We can capture this guaranteed yield.
+- **The Trade:** Buy $100 of Spot BTC and simultaneously Short $100 of BTC Perpetual Futures.
+- **The Result:** Your net exposure to Bitcoin's price is $0 (you are perfectly hedged). However, every 8 hours, the Longs pay you the funding rate.
+- **Profitability:** Funding rates can often reach 20-50% APR during active markets. It is low-risk, steady income.
+- **Implementation:** I would add a `fundingArbitrage.ts` module that monitors the live funding rate on Delta. When the rate crosses a profitable threshold, it automatically enters the hedged position and collects the yield.
+
+## Strategy 2: Automated Grid Trading (Sideways Market Killer)
+**How it works:** Instead of trying to guess if the market goes up or down, we place a "grid" of limit buy and sell orders above and below the current price. 
+- **The Trade:** If BTC is at $60k, we place Buy limit orders every $100 down to $58k, and Sell limit orders every $100 up to $62k. As the price wiggles around, it constantly buys low and sells high.
+- **The Result:** Highly profitable in choppy, sideways markets where directional signals (like your current signal fetcher) struggle. 
+- **Profitability:** Because we switched to Limit Orders (0.02% maker fee), grid trading is extremely fee-efficient on Delta Exchange.
+- **Implementation:** I would create a `gridManager.ts` that automatically replenishes limit orders as they get filled, creating an endless cycle of micro-profits.
+
+## Strategy 3: Risk-Defined Options (Iron Condors)
+**How it works:** Currently, your bot runs a **Short Straddle**. This is highly profitable (collecting Theta/time decay), but it has theoretically unlimited risk if BTC suddenly crashes or spikes by $10,000 in a day. We can fix this.
+- **The Trade:** We continue selling the ATM Call and Put (the Straddle) to collect premium, but we simultaneously *Buy* cheap, far Out-Of-The-Money (OTM) Calls and Puts to act as insurance. This is called an Iron Condor.
+- **The Result:** You still collect Theta decay every day, but your maximum possible loss is strictly capped, protecting your $200 account from black swan liquidation.
+- **Implementation:** I would modify `optionsManager.ts` to fetch OTM strikes and execute a 4-leg Iron Condor instead of a 2-leg Straddle. 
+
+---
+
+## Open Questions
+> [!TIP]
+> 1. Which of these three strategies would you like to implement next?
+> 2. Do you want to keep the current Short Straddle running while we build the new strategy, or pause it?

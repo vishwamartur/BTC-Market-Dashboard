@@ -4,6 +4,8 @@
  * All API route callers read from cache — zero outbound requests.
  */
 
+import { resilientFetch } from './resilientFetch';
+
 const BINANCE_FAPI = 'https://fapi.binance.com';
 const POLL_INTERVAL_MS = 10_000; // 10 seconds
 
@@ -76,10 +78,10 @@ class MarketCache {
       try {
         const [lsRatioRes, oiRes, ttRatioRes, fundingRes] =
           await Promise.allSettled([
-            fetch(`${BINANCE_FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1`),
-            fetch(`${BINANCE_FAPI}/fapi/v1/openInterest?symbol=BTCUSDT`),
-            fetch(`${BINANCE_FAPI}/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1`),
-            fetch(`${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`),
+            resilientFetch(`${BINANCE_FAPI}/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=5m&limit=1`, { retries: 1, timeoutMs: 8000 }),
+            resilientFetch(`${BINANCE_FAPI}/fapi/v1/openInterest?symbol=BTCUSDT`, { retries: 1, timeoutMs: 8000 }),
+            resilientFetch(`${BINANCE_FAPI}/futures/data/topLongShortPositionRatio?symbol=BTCUSDT&period=5m&limit=1`, { retries: 1, timeoutMs: 8000 }),
+            resilientFetch(`${BINANCE_FAPI}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`, { retries: 1, timeoutMs: 8000 }),
           ]);
 
         const extract = async (res: PromiseSettledResult<Response>) => {
@@ -138,9 +140,7 @@ class MarketCache {
 // Global singleton (survives Next.js hot reloads)
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-namespace
 declare global {
-  // eslint-disable-next-line no-var
   var _marketCache: MarketCache | undefined;
 }
 

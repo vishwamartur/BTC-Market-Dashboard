@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:signals": "tsx --test app/lib/signals.test.ts app/lib/indicators.test.ts app/lib/newsSentiment.test.ts app/lib/signalQuality.test.ts app/lib/dailyRisk.test.ts app/lib/serverTradeGuard.test.ts",
+    "signal-worker": "tsx scripts/runSignalWorker.ts",
+    "trade-worker": "tsx scripts/runAutoTradeWorker.ts"
   },
   "dependencies": {
     "crypto-js": "^4.2.0",

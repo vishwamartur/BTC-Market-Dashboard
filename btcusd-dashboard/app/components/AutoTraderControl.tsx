@@ -1,6 +1,7 @@
 import React from 'react';
 import type { TradeLog } from '../hooks/useAutonomousTrading';
 import type { ActivePosition } from '../lib/positions';
+import type { DailyRiskSnapshot } from '../lib/dailyRisk';
 
 interface AutoTraderControlProps {
   isEnabled: boolean;
@@ -10,6 +11,7 @@ interface AutoTraderControlProps {
   isPositionLoaded: boolean;
   isClosingPosition: boolean;
   closeActivePosition: (reason?: string) => Promise<void>;
+  dailyRisk: DailyRiskSnapshot | null;
 }
 
 export default function AutoTraderControl({
@@ -20,6 +22,7 @@ export default function AutoTraderControl({
   isPositionLoaded,
   isClosingPosition,
   closeActivePosition,
+  dailyRisk,
 }: AutoTraderControlProps) {
   const positionColor = activePosition?.side === 'LONG' ? 'var(--green)' : 'var(--red)';
 
@@ -125,7 +128,15 @@ export default function AutoTraderControl({
         </div>
 
         <div style={{ marginTop: '16px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
-          Bot executes trades on Delta Exchange when the v2 Signal Engine reaches <strong>STRONG BUY</strong> or <strong>STRONG SELL</strong> for 3+ consecutive evaluations. Existing positions are synced from Delta and closed on opposite strong signals. Daily loss limit: $100. Cooldown: 5 min.
+          The always-on trade worker executes Delta trades after 3+ consecutive strong signals. Existing positions are closed on opposite strong signals. New entries require fresh, server-verified daily P&amp;L, a durable cooldown, and protective bracket orders.
+        </div>
+
+        <div style={{ margin: '10px 0 16px', fontSize: '11px', color: dailyRisk?.lossLimitReached ? 'var(--red)' : 'var(--text-muted)' }}>
+          {dailyRisk
+            ? dailyRisk.available
+              ? `Daily realized P&L: $${dailyRisk.realizedPnlUsd.toFixed(2)} / loss limit $${dailyRisk.lossLimitUsd.toFixed(2)}${dailyRisk.lossLimitReached ? ' — entries locked' : ''}`
+              : `Daily-loss guard unavailable — entries paused (${dailyRisk.reason || 'unknown error'})`
+            : 'Checking server-side daily-loss guard…'}
         </div>
 
         <div style={{

@@ -5,6 +5,15 @@ interface SignalEngineProps {
 }
 
 export default function SignalEngine({ signal }: SignalEngineProps) {
+  const blockingSources = signal.dataQuality?.blockingSources ?? [];
+  const isAwaitingConfluence = signal.overallSignal === 'NEUTRAL'
+    && signal.dataQuality?.isReady
+    && signal.rawScore !== undefined;
+  // Display the live bias without changing the tradeable, gate-protected signal.
+  const displayScore = isAwaitingConfluence ? signal.rawScore ?? signal.score : signal.score;
+  const displayConfidence = isAwaitingConfluence
+    ? signal.provisionalConfidence ?? signal.confidence
+    : signal.confidence;
   const getSignalColor = (s: string) => {
     switch (s) {
       case 'STRONG BUY': return 'var(--green)';
@@ -23,6 +32,21 @@ export default function SignalEngine({ signal }: SignalEngineProps) {
         <span className="card-badge" style={{ background: 'var(--purple)', color: '#fff', boxShadow: '0 0 10px var(--purple)' }}>v2 Algorithm</span>
       </div>
 
+      {signal.dataQuality && !signal.dataQuality.isReady && (
+        <div style={{
+          marginTop: '12px',
+          padding: '10px 12px',
+          borderRadius: 'var(--radius-xs)',
+          border: '1px solid var(--amber)',
+          background: 'rgba(245, 158, 11, 0.10)',
+          color: 'var(--amber)',
+          fontSize: '11px',
+          lineHeight: 1.4,
+        }}>
+          Trading paused — waiting for fresh {blockingSources.join(' and ')} data.
+        </div>
+      )}
+
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', margin: '20px 0' }}>
         <div style={{
           fontSize: '36px',
@@ -33,11 +57,21 @@ export default function SignalEngine({ signal }: SignalEngineProps) {
           {signal.overallSignal}
         </div>
         <div style={{ fontSize: '14px', color: 'var(--text-muted)', marginTop: '8px' }}>
-          Confidence: <strong style={{ color: 'var(--text-primary)' }}>{signal.confidence}%</strong>
+          Confidence: <strong style={{ color: 'var(--text-primary)' }}>{displayConfidence}%</strong>
           <span style={{ marginLeft: '16px', color: 'var(--text-muted)' }}>
-            Score: <strong style={{ color: getSignalColor(signal.overallSignal) }}>{signal.score > 0 ? '+' : ''}{signal.score.toFixed(3)}</strong>
+            Score: <strong style={{ color: getSignalColor(displayScore < 0 ? 'SELL' : displayScore > 0 ? 'BUY' : signal.overallSignal) }}>{displayScore > 0 ? '+' : ''}{displayScore.toFixed(3)}</strong>
           </span>
         </div>
+        {isAwaitingConfluence && signal.rawScore !== undefined && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center' }}>
+            Awaiting confluence: <strong style={{ color: 'var(--text-secondary)' }}>{signal.confluenceCount ?? 0}/3</strong> aligned drivers
+            <span style={{ marginLeft: '10px' }}>
+              Raw score: <strong style={{ color: getSignalColor(signal.rawScore < 0 ? 'SELL' : signal.rawScore > 0 ? 'BUY' : 'NEUTRAL') }}>
+                {signal.rawScore > 0 ? '+' : ''}{signal.rawScore.toFixed(3)}
+              </strong>
+            </span>
+          </div>
+        )}
         
         {/* Gauge Visual */}
         <div style={{ marginTop: '24px', width: '100%' }}>
@@ -57,7 +91,7 @@ export default function SignalEngine({ signal }: SignalEngineProps) {
               bottom: 0,
               width: '4px',
               background: '#fff',
-              left: `min(max(${50 + (signal.score * 50)}%, 0%), 100%)`,
+              left: `min(max(${50 + (displayScore * 50)}%, 0%), 100%)`,
               transform: 'translateX(-50%)',
               zIndex: 10,
               boxShadow: '0 0 10px #fff, 0 0 20px #fff',

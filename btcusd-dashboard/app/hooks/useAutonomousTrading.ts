@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { SignalResult, SignalStrength } from '../lib/signals';
-import { shouldTrade, canTrade, DEFAULT_RISK_CONFIG, type RiskConfig } from '../lib/riskManager';
+import type { SignalResult } from '../lib/signals';
 import type { ActivePosition } from '../lib/positions';
+import type { DailyRiskSnapshot } from '../lib/dailyRisk';
 
 export type TradeAction = 'BUY' | 'SELL' | 'CLOSE_LONG' | 'CLOSE_SHORT';
 
@@ -22,8 +22,6 @@ interface UseAutonomousTradingProps {
   currentPrice?: number;
 }
 
-const RISK_CONFIG: RiskConfig = DEFAULT_RISK_CONFIG;
-
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -35,44 +33,48 @@ function normalizeTradeAction(action: unknown): TradeAction {
   return 'BUY';
 }
 
-export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomousTradingProps) {
-  // SAFETY: default to disabled — user must explicitly enable
-  const [isEnabled, setIsEnabled] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
+export function useAutonomousTrading({ signal }: UseAutonomousTradingProps) {
+  // This durable setting is consumed by the always-on trade worker, not this
+  // browser tab. Closing the dashboard therefore cannot stop the strategy.
+  const [isEnabled, setIsEnabledState] = useState(false);
   const [tradeLogs, setTradeLogs] = useState<TradeLog[]>([]);
   const [activePosition, setActivePosition] = useState<ActivePosition | null>(null);
   const [isPositionLoaded, setIsPositionLoaded] = useState(false);
   const [isClosingPosition, setIsClosingPosition] = useState(false);
 
-  useEffect(() => {
-    let savedEnabled: boolean | null = null;
-    try {
-      const rawEnabled = localStorage.getItem('autoTrader_isEnabled');
-      if (rawEnabled !== null) {
-        const parsed = JSON.parse(rawEnabled);
-        if (typeof parsed === 'boolean') savedEnabled = parsed;
-      }
-    } catch (e) {
-      console.error('Error reading localStorage', e);
-    }
+  const [dailyRisk, setDailyRisk] = useState<DailyRiskSnapshot | null>(null);
+  const dailyPnl = dailyRisk?.realizedPnlUsd ?? 0;
+  const isExecutingRef = useRef<boolean>(false);
 
-    queueMicrotask(() => {
-      if (savedEnabled !== null) setIsEnabled(savedEnabled);
-      setIsLoaded(true);
+  const setIsEnabled = useCallback((enabled: boolean) => {
+    setIsEnabledState(enabled);
+    void fetch('/api/autotrader/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error('Could not update durable auto-trader setting');
+      const config = await res.json() as { enabled: boolean };
+      setIsEnabledState(config.enabled);
+    }).catch((error) => {
+      console.error('Failed to update auto-trader setting:', error);
+      setIsEnabledState(false);
     });
   }, []);
 
   useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem('autoTrader_isEnabled', JSON.stringify(isEnabled));
-    }
-  }, [isEnabled, isLoaded]);
-  const [dailyPnl] = useState(0);
-  
-  const lastTradeTimeRef = useRef<number>(0);
-  const isExecutingRef = useRef<boolean>(false);
-  const lastSignalRef = useRef<SignalStrength>('NEUTRAL');
-  const consecutiveSignalCountRef = useRef<number>(0);
+    let active = true;
+    void fetch('/api/autotrader/config', { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Could not load durable auto-trader setting');
+        return res.json() as Promise<{ enabled: boolean }>;
+      })
+      .then((config) => {
+        if (active) setIsEnabledState(config.enabled);
+      })
+      .catch((error) => console.error('Failed to load auto-trader setting:', error));
+    return () => { active = false; };
+  }, []);
 
   const refreshPosition = useCallback(async () => {
     try {
@@ -88,60 +90,16 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
     }
   }, []);
 
-  const executeTrade = useCallback(async (action: 'BUY' | 'SELL', signalScore: number, size: number = 1) => {
-    isExecutingRef.current = true;
-    lastTradeTimeRef.current = Date.now();
-
-    const logId = Math.random().toString(36).substr(2, 9);
-    
-    const newLog: TradeLog = {
-      id: logId,
-      timestamp: new Date(),
-      action,
-      signalScore,
-      status: 'PENDING',
-      size,
-    };
-
-    setTradeLogs((prev) => [newLog, ...prev].slice(0, 50)); // Keep last 50
-
+  const refreshDailyRisk = useCallback(async () => {
     try {
-      const res = await fetch('/api/trade', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          size,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (res.ok && data.success) {
-        setTradeLogs((prev) =>
-          prev.map((log) =>
-            log.id === logId
-              ? { ...log, status: 'SUCCESS', details: `Order ID: ${data.result?.id} | Size: ${size}` }
-              : log
-          )
-        );
-        void refreshPosition();
-      } else {
-        throw new Error(data.error?.code || data.error || 'Unknown error');
-      }
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      setTradeLogs((prev) =>
-        prev.map((log) =>
-          log.id === logId
-            ? { ...log, status: 'FAILED', details: message }
-            : log
-        )
-      );
-    } finally {
-      isExecutingRef.current = false;
+      const res = await fetch('/api/risk/daily', { cache: 'no-store' });
+      const data = await res.json() as DailyRiskSnapshot;
+      setDailyRisk(data);
+    } catch {
+      // A missing risk snapshot blocks entries below; exits remain available.
+      setDailyRisk(null);
     }
-  }, [refreshPosition]);
+  }, []);
 
   const closeActivePosition = useCallback(async (reason = 'Manual close') => {
     if (isExecutingRef.current) return;
@@ -153,8 +111,6 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
 
     isExecutingRef.current = true;
     setIsClosingPosition(true);
-    lastTradeTimeRef.current = Date.now();
-
     const action: TradeAction = activePosition.side === 'LONG' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
     const logId = Math.random().toString(36).substr(2, 9);
 
@@ -177,6 +133,7 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
         body: JSON.stringify({
           action: 'CLOSE_POSITION',
           reason,
+          requestId: logId,
         }),
       });
 
@@ -251,77 +208,24 @@ export function useAutonomousTrading({ signal, currentPrice = 0 }: UseAutonomous
   }, [refreshPosition]);
 
   useEffect(() => {
-    // Check if trading is enabled and signal is strong enough
-    if (!isEnabled || !isPositionLoaded || isExecutingRef.current) return;
-
-    // Signal debounce: require same signal direction for 3 consecutive evaluations
-    if (signal.overallSignal === lastSignalRef.current) {
-      consecutiveSignalCountRef.current++;
-    } else {
-      consecutiveSignalCountRef.current = 1;
-      lastSignalRef.current = signal.overallSignal;
-    }
-
-    // Need at least 3 consecutive same-direction signals before acting
-    if (consecutiveSignalCountRef.current < 3) return;
-
-    // Use risk manager to determine if and how much to trade (fee-aware)
-    const decision = shouldTrade({
-      overallSignal: signal.overallSignal,
-      confidence: signal.confidence,
-      score: signal.score,
-    }, RISK_CONFIG, currentPrice);
-
-    if (activePosition) {
-      const shouldCloseLong = activePosition.side === 'LONG' && decision.action === 'SELL';
-      const shouldCloseShort = activePosition.side === 'SHORT' && decision.action === 'BUY';
-
-      if (shouldCloseLong || shouldCloseShort) {
-        const reason = `Opposite ${signal.overallSignal} signal`;
-        queueMicrotask(() => {
-          void closeActivePosition(reason);
-        });
-      }
-      return;
-    }
-
-    const now = Date.now();
-    const timeSinceLastTrade = now - lastTradeTimeRef.current;
-
-    // Enforce cooldown for entries only. Exits above are always allowed.
-    if (timeSinceLastTrade < RISK_CONFIG.cooldownMs) return;
-
-    // Check daily loss circuit breaker for new entries only.
-    if (!canTrade(dailyPnl, RISK_CONFIG)) {
-      console.log('[AUTO-TRADER] Daily loss limit reached, trading halted');
-      return;
-    }
-
-    if (decision.action && decision.size > 0) {
-      const { action, size } = decision;
-      const score = signal.score;
-      queueMicrotask(() => {
-        void executeTrade(action, score, size);
-      });
-    }
-  }, [
-    signal.overallSignal,
-    isEnabled,
-    isPositionLoaded,
-    activePosition,
-    signal.score,
-    signal.confidence,
-    dailyPnl,
-    currentPrice,
-    executeTrade,
-    closeActivePosition,
-  ]);
+    const initial = setTimeout(() => {
+      void refreshDailyRisk();
+    }, 0);
+    const interval = setInterval(() => {
+      void refreshDailyRisk();
+    }, 60_000);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
+  }, [refreshDailyRisk]);
 
   return {
     isEnabled,
     setIsEnabled,
     tradeLogs,
     dailyPnl,
+    dailyRisk,
     activePosition,
     isPositionLoaded,
     isClosingPosition,

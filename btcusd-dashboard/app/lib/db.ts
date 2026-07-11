@@ -3,6 +3,9 @@ import { MongoClient, Db } from 'mongodb';
 const MONGODB_URI = process.env.MONGODB_URI || '';
 const DB_NAME = 'btcusd';
 
+/** Whether durable state can be used in this process. */
+export const isDatabaseConfigured = Boolean(MONGODB_URI);
+
 if (!MONGODB_URI) {
   console.warn('[MongoDB] No MONGODB_URI found in environment variables');
 }
@@ -10,9 +13,7 @@ if (!MONGODB_URI) {
 // Cache the client across hot reloads in dev
 let cached: { client: MongoClient; db: Db } | null = null;
 
-// eslint-disable-next-line @typescript-eslint/no-namespace
 declare global {
-  // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 
@@ -128,9 +129,7 @@ class BatchWriter {
 }
 
 // Global singleton
-// eslint-disable-next-line @typescript-eslint/no-namespace
 declare global {
-  // eslint-disable-next-line no-var
   var _batchWriter: BatchWriter | undefined;
 }
 
@@ -164,6 +163,10 @@ export async function ensureIndexes(): Promise<void> {
         { _insertedAt: 1 },
         { expireAfterSeconds: 30 * 24 * 60 * 60 } // 30-day TTL
       ),
+      db.collection('signal_state').createIndex({ updatedAt: -1 }),
+      db.collection('trade_execution_state').createIndex({ updatedAt: -1 }),
+      db.collection('trade_requests').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+      db.collection('autotrader_config').createIndex({ updatedAt: -1 }),
       db.collection('whale_transactions').createIndex({ hash: 1 }, { unique: true }),
       db.collection('whale_transactions').createIndex({ time: -1 }),
     ]);

@@ -29,6 +29,11 @@ interface PlaceOrderOptions {
   reduceOnly?: boolean;
   cancelOrdersAccepted?: boolean;
   clientOrderId?: string;
+  bracket?: {
+    stopLossPrice: string;
+    takeProfitPrice: string;
+    triggerMethod?: 'mark_price' | 'last_traded_price' | 'spot_price';
+  };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -97,9 +102,12 @@ async function deltaRequest<T = Record<string, unknown>>(opts: DeltaRequestOptio
     }
 
     if (!data.success) {
-      const errObj = data.error as any;
-      if (!isTimeRetry && errObj && errObj.code === 'expired_signature' && errObj.context && typeof errObj.context.server_time === 'number') {
-        const serverTime = errObj.context.server_time;
+      const errObj = data.error;
+      const errorRecord = errObj && typeof errObj === 'object' ? errObj as Record<string, unknown> : null;
+      const context = errorRecord?.context;
+      const contextRecord = context && typeof context === 'object' ? context as Record<string, unknown> : null;
+      if (!isTimeRetry && errorRecord?.code === 'expired_signature' && typeof contextRecord?.server_time === 'number') {
+        const serverTime = contextRecord.server_time;
         timeOffset = serverTime - Math.floor(Date.now() / 1000);
         console.warn(`[${label}] Signature expired. Adjusting timeOffset to ${timeOffset}s and retrying.`);
         return deltaRequest(opts, true);
@@ -138,6 +146,11 @@ export async function placeDeltaOrder(
   if (options.reduceOnly !== undefined) payloadObj.reduce_only = options.reduceOnly;
   if (options.cancelOrdersAccepted !== undefined) payloadObj.cancel_orders_accepted = options.cancelOrdersAccepted;
   if (options.clientOrderId) payloadObj.client_order_id = options.clientOrderId;
+  if (options.bracket) {
+    payloadObj.bracket_stop_loss_price = options.bracket.stopLossPrice;
+    payloadObj.bracket_take_profit_price = options.bracket.takeProfitPrice;
+    payloadObj.bracket_stop_trigger_method = options.bracket.triggerMethod ?? 'mark_price';
+  }
 
   return deltaRequest<DeltaOrderResponse>({
     method: 'POST',
@@ -179,9 +192,29 @@ export async function setDeltaLeverage(
   });
 }
 
-export async function getDeltaFills(apiKey: string, apiSecret: string, productId?: number, limit: number = 100) {
-  let path = `/v2/fills?limit=${limit}`;
-  if (productId) path += `&product_id=${productId}`;
+export interface DeltaFillsTimeRange {
+  /** Epoch milliseconds. Delta expects these values in microseconds. */
+  startTimeMs?: number;
+  /** Epoch milliseconds. Delta expects these values in microseconds. */
+  endTimeMs?: number;
+  /** Cursor returned by the previous fills page. */
+  after?: string;
+}
+
+export async function getDeltaFills(
+  apiKey: string,
+  apiSecret: string,
+  productId?: number,
+  limit: number = 50,
+  timeRange: DeltaFillsTimeRange = {},
+) {
+  // Delta's current v2 API uses page_size (maximum 50) and product_ids.
+  // Keeping the limit argument retains compatibility with existing callers.
+  let path = `/v2/fills?page_size=${Math.min(Math.max(1, limit), 50)}`;
+  if (productId) path += `&product_ids=${productId}`;
+  if (timeRange.startTimeMs) path += `&start_time=${Math.floor(timeRange.startTimeMs * 1000)}`;
+  if (timeRange.endTimeMs) path += `&end_time=${Math.floor(timeRange.endTimeMs * 1000)}`;
+  if (timeRange.after) path += `&after=${encodeURIComponent(timeRange.after)}`;
 
   return deltaRequest({
     method: 'GET',

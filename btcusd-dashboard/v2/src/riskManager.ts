@@ -8,12 +8,9 @@
  * - shouldTrade() rejects trades where expected profit < 1.5× fees
  */
 
-export type TradeAction = 'BUY' | 'SELL' | 'HEDGE' | null;
-
-export interface RiskDecision {
-  action: TradeAction;
-  size: number;
-}
+// Re-export from centralized types for backward compatibility
+import type { TradeAction } from './types.js';
+export type { TradeAction, RiskDecision } from './types.js';
 
 export interface RiskConfig {
   maxDailyLossUsd: number;       // e.g. 50 — halt trading if daily loss exceeds this
@@ -30,6 +27,8 @@ export interface RiskConfig {
   estimatedLossPct: number;       // e.g. 0.002 (0.2%) average losing move
   minBreakEvenMultiple: number;   // e.g. 1.5 — expected profit must be >= 1.5× round-trip cost
   contractSizeBtc: number;        // e.g. 0.001 — BTC per contract on Delta Exchange
+  minConfluenceComponents: number; // e.g. 3 — minimum number of strong signal components required to trade
+  minComponentScore: number;      // e.g. 0.3 — minimum score for a component to count toward confluence
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
@@ -47,26 +46,16 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   estimatedLossPct: 0.002,        // 0.2% expected loss move (was 0.15%)
   minBreakEvenMultiple: 1.5,      // Expected profit must be >= 1.5× fees
   contractSizeBtc: 0.001,         // 0.001 BTC per contract on Delta
+  minConfluenceComponents: 3,     // NEW: need >=3 strong components before trading
+  minComponentScore: 0.3,         // NEW: a component counts toward confluence when its score >= 0.3
 };
 
 // ---------------------------------------------------------------------------
 // Breakeven Calculator
 // ---------------------------------------------------------------------------
 
-export interface BreakEvenResult {
-  /** Minimum price move (%) to cover round-trip fees + GST */
-  breakEvenMovePct: number;
-  /** Total round-trip cost in USD (fees + GST) */
-  roundTripCostUsd: number;
-  /** Trading fee component (USD) */
-  feeUsd: number;
-  /** GST component (USD) */
-  gstUsd: number;
-  /** Notional value of the position (USD) */
-  notionalUsd: number;
-  /** Whether using maker or taker fees */
-  feeType: 'maker' | 'taker';
-}
+import type { BreakEvenResult } from './types.js';
+export type { BreakEvenResult } from './types.js';
 
 /**
  * Calculate the break-even cost for a round-trip trade (open + close).
@@ -212,7 +201,7 @@ export function calculateExpectedNetValue(
  * Includes a fee-aware expected value filter AND breakeven cost check.
  */
 export function shouldTrade(
-  signal: { overallSignal: string; confidence: number; score: number },
+  signal: { overallSignal: string; confidence: number; score: number; trendDrift?: number; confluenceCount?: number },
   config: RiskConfig = DEFAULT_RISK_CONFIG,
   currentPrice: number = 0
 ): { action: TradeAction; size: number; breakEven?: BreakEvenResult } {
@@ -221,8 +210,22 @@ export function shouldTrade(
     // If it's very low confidence or choppy market (e.g. 40 to 60), we hedge.
     // For now, any time it's under minConfidence but above say 30, we'll try a hedge.
     if (signal.confidence > 30) {
-      return { action: 'HEDGE', size: 1 };
+      // Drift-enhanced hedge: if trend drift is strongly negative, return a
+      // multiplier of 1.5 so the hedge strategy sizes up the straddle.
+      // Consumers should treat `size` as a multiplier (>= 1).
+      const isDriftDown =
+        signal.trendDrift !== undefined && signal.trendDrift < -0.2;
+      return { action: 'HEDGE', size: isDriftDown ? 1.5 : 1 };
     }
+    return { action: null, size: 0 };
+  }
+
+  // Confluence gate: signals from the new engine must have enough strong components.
+  // Missing confluenceCount is treated as legacy (pass-through) for backward compatibility.
+  if ((signal.confluenceCount ?? Number.MAX_SAFE_INTEGER) < config.minConfluenceComponents) {
+    console.log(
+      `[RISK] Skipping trade: confluence ${signal.confluenceCount ?? 'legacy'} < ${config.minConfluenceComponents}`
+    );
     return { action: null, size: 0 };
   }
 

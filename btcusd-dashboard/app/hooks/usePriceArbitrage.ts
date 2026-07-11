@@ -266,18 +266,19 @@ export function usePriceArbitrage() {
 
         // 1. Check Exit conditions if we have a position
         if (position) {
+          const pos = position!;
           const exitCheck = shouldExitTrade(
-            data.prices.consensus, 
-            data.prices.delta, 
-            position.side, 
-            position.entryTime, 
+            data.prices.consensus,
+            data.prices.delta,
+            pos.side,
+            pos.entryTime,
             DEFAULT_ARB_CONFIG
           );
 
           if (exitCheck.shouldExit) {
-            const exitAction = position.side === 'BUY_DELTA' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
-            const exitPrice = position.side === 'BUY_DELTA' ? data.prices.deltaBid : data.prices.deltaAsk;
-            executeTrade(exitAction, exitPrice || data.prices.delta, exitCheck.reason, data.spreadPct, position);
+            const exitAction = pos.side === 'BUY_DELTA' ? 'CLOSE_LONG' : 'CLOSE_SHORT';
+            const exitPrice = pos.side === 'BUY_DELTA' ? data.prices.deltaBid : data.prices.deltaAsk;
+            executeTrade(exitAction, exitPrice || data.prices.delta, exitCheck.reason, data.spreadPct, pos);
           }
           return;
         }

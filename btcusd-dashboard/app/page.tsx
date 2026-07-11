@@ -70,6 +70,7 @@ export default function Dashboard() {
     isPositionLoaded,
     isClosingPosition,
     closeActivePosition,
+    dailyRisk,
   } = useAutonomousTrading({ signal, currentPrice: price });
 
   return (
@@ -149,6 +150,7 @@ export default function Dashboard() {
             isPositionLoaded={isPositionLoaded}
             isClosingPosition={isClosingPosition}
             closeActivePosition={closeActivePosition}
+            dailyRisk={dailyRisk}
           />
         </div>
         <OnChainAnalytics

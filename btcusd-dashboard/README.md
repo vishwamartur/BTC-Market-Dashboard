@@ -73,8 +73,19 @@ If you intend to use the Live Auto-Trader, securely provide your Delta Exchange 
 ```env
 DELTA_API_KEY=your_api_key_here
 DELTA_API_SECRET=your_api_secret_here
+MONGODB_URI=your_mongodb_connection_string
+
+# New entries are deliberately disabled unless this is set to true.
+LIVE_TRADING_ENABLED=false
+# Recommended for a deployed dashboard; must exactly match the dashboard origin.
+TRADING_ALLOWED_ORIGIN=https://your-dashboard.example
+# India trading-day boundary by default; configure only if your accounting day differs.
+TRADING_DAY_UTC_OFFSET_MINUTES=330
+MAX_DAILY_LOSS_USD=100
+# New entries use 10× by default and cannot exceed 20×.
+TRADING_LEVERAGE=10
 ```
-> **Note:** The UI defaults to **PAPER TRADING** mode to ensure your funds are safe during testing.
+> **Note:** Live entry requests require a same-origin browser request, fresh server-verified daily P&L, and `LIVE_TRADING_ENABLED=true`. Set a real authentication layer before exposing the dashboard publicly.
 
 ### 3. Installation
 Clone the repository and install the dependencies:
@@ -88,6 +99,32 @@ Fire up the development server:
 npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000) in your browser. The WebSockets will instantly connect and data will begin flowing!
+
+### Production signal worker
+
+The dashboard API reads the most recent signal from MongoDB. For production,
+run the ingestion and signal calculation process separately on an always-on
+Node host (not as a serverless route handler):
+
+```bash
+npm run signal-worker
+```
+
+Set `MONGODB_URI` for both the worker and dashboard. The worker stores only
+bounded rolling buckets and the latest signal snapshot. If the price or market
+feed is stale, it publishes `NEUTRAL` with a readiness warning and the
+auto-trader must not open a new position.
+
+Run the auto-trader separately as well. Its enable switch is stored in MongoDB,
+so it keeps running when the dashboard browser closes:
+
+```bash
+DASHBOARD_URL=https://your-dashboard.example npm run trade-worker
+```
+
+The worker requires `DASHBOARD_URL`, `TRADING_ALLOWED_ORIGIN`, `MONGODB_URI`,
+and Delta credentials. It stays inactive until the dashboard enables it and
+`LIVE_TRADING_ENABLED=true` is set on the dashboard server.
 
 ---
 

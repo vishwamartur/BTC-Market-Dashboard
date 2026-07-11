@@ -17,18 +17,24 @@ export function useSignalEngine(_props: Record<string, unknown> = {}): SignalRes
     confidence: 0,
     score: 0,
     components: [],
-    timestamp: Date.now(),
+    timestamp: 0,
   });
 
   const activeRef = useRef(true);
 
   useEffect(() => {
     activeRef.current = true;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    let controller: AbortController | null = null;
 
     const fetchSignal = async () => {
       if (!activeRef.current) return;
       try {
-        const res = await fetch('/api/signal');
+        controller = new AbortController();
+        const res = await fetch('/api/signal', {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
         if (!res.ok) return;
         const data: SignalResult = await res.json();
         if (activeRef.current) {
@@ -36,15 +42,19 @@ export function useSignalEngine(_props: Record<string, unknown> = {}): SignalRes
         }
       } catch {
         // ignore fetch errors — keep showing last signal
+      } finally {
+        // Schedule after completion so slow responses cannot overlap and pile
+        // up requests in a backgrounded tab.
+        if (activeRef.current) timeout = setTimeout(fetchSignal, POLL_INTERVAL_MS);
       }
     };
 
-    fetchSignal();
-    const interval = setInterval(fetchSignal, POLL_INTERVAL_MS);
+    void fetchSignal();
 
     return () => {
       activeRef.current = false;
-      clearInterval(interval);
+      controller?.abort();
+      if (timeout) clearTimeout(timeout);
     };
   }, []);
 

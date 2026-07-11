@@ -1,22 +1,40 @@
 import { NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { getDeltaPositions, placeDeltaOrder, setDeltaLeverage, getOrderById, cancelOrder } from '../../lib/delta';
 import { insertOneAsync } from '../../lib/db';
 import { normalizeDeltaPosition } from '../../lib/positions';
 import { calculateBreakEven, DEFAULT_RISK_CONFIG } from '../../lib/riskManager';
+import { getCurrentDayRisk } from '../../lib/dailyRiskService';
+import { validateServerEntry, type EntryProtection } from '../../lib/serverTradeGuard';
+import {
+  acquireExecutionLease,
+  recordEntryAccepted,
+  releaseExecutionLease,
+  reserveTradeRequest,
+  completeTradeRequest,
+  type ExecutionLease,
+} from '../../lib/tradeExecutionState';
+import { isTrustedTradingOrigin } from '../../lib/tradeAuth';
+import { resilientFetch } from '../../lib/resilientFetch';
 
 export const runtime = 'nodejs';
 
 // Delta API Keys — MUST be set in .env.local, no hardcoded fallbacks
 const DELTA_API_KEY = process.env.DELTA_API_KEY || '';
 const DELTA_API_SECRET = process.env.DELTA_API_SECRET || '';
+const LIVE_TRADING_ENABLED = process.env.LIVE_TRADING_ENABLED === 'true';
 
 // Product ID 27 is BTCUSD linear perp on Delta Exchange India
 const BTCUSDT_PRODUCT_ID = 27;
-const LEVERAGE = 50;
+const DEFAULT_LEVERAGE = 10;
+const MAX_LEVERAGE = 20;
+const configuredLeverage = Number(process.env.TRADING_LEVERAGE || DEFAULT_LEVERAGE);
+const LEVERAGE = Number.isFinite(configuredLeverage)
+  ? Math.min(Math.max(1, Math.floor(configuredLeverage)), MAX_LEVERAGE)
+  : DEFAULT_LEVERAGE;
 
 // Server-side safety limits
 const DEFAULT_TRADE_SIZE = 15;
-const MAX_TRADE_SIZE = 50; // Hard cap regardless of client request
 
 // Maker order offset — place limit orders this many USD inside the spread
 // to maximize maker fill chance (0.02% fee vs 0.05% taker)
@@ -63,13 +81,63 @@ function cacheAndRespond(requestId: string | undefined, responseData: unknown, s
 }
 
 export async function POST(request: Request) {
+  let executionLease: ExecutionLease | null = null;
+  let reservedRequestId: string | null = null;
   try {
     const body = await request.json();
-    const { action, size: rawSize = DEFAULT_TRADE_SIZE, reason, requestId } = body;
+    const { action, reason, requestId } = body;
+    const executionRequestId = typeof requestId === 'string' && requestId.length > 0
+      ? requestId.slice(0, 24)
+      : randomUUID().replaceAll('-', '').slice(0, 24);
+    const clientOrderId = `signal-${executionRequestId}`.slice(0, 32);
 
     if (!['BUY', 'SELL', 'CLOSE_POSITION'].includes(action)) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
+
+    if (!isTrustedTradingOrigin(request)) {
+      return NextResponse.json({ error: 'Untrusted trading request origin' }, { status: 403 });
+    }
+
+    // Entries are explicitly opt-in at deployment time. This prevents a
+    // dashboard with configured credentials from trading just because a user
+    // toggled local browser state or an endpoint was exposed accidentally.
+    if (action !== 'CLOSE_POSITION' && !LIVE_TRADING_ENABLED) {
+      return NextResponse.json(
+        { error: 'Live entries are disabled. Set LIVE_TRADING_ENABLED=true only after deployment hardening.' },
+        { status: 403 },
+      );
+    }
+
+    const isEntry = action !== 'CLOSE_POSITION';
+    const leaseResult = await acquireExecutionLease(
+      executionRequestId,
+      isEntry,
+      DEFAULT_RISK_CONFIG.cooldownMs,
+    );
+    if (!leaseResult.acquired) {
+      const retryAfterSeconds = leaseResult.retryAfterMs
+        ? Math.max(1, Math.ceil(leaseResult.retryAfterMs / 1000))
+        : undefined;
+      return NextResponse.json(
+        {
+          error: leaseResult.reason === 'cooldown'
+            ? `Entry cooldown active. Retry after ${retryAfterSeconds}s.`
+            : leaseResult.reason === 'busy'
+              ? 'Another trade execution is already in progress.'
+              : 'Durable trade lock is unavailable; entries are paused.',
+        },
+        { status: leaseResult.reason === 'persistence_unavailable' ? 503 : 409 },
+      );
+    }
+    executionLease = leaseResult.lease;
+
+    const finalizeTradeResponse = async (responseData: Record<string, unknown>, status: number) => {
+      if (reservedRequestId) {
+        await completeTradeRequest(reservedRequestId, responseData, status);
+      }
+      return cacheAndRespond(executionRequestId, responseData, status);
+    };
 
     // Idempotency check
     if (requestId && typeof requestId === 'string') {
@@ -92,13 +160,41 @@ export async function POST(request: Request) {
     }
     lastTradeTimestamp = now;
 
-    console.log(`[TRADE] ${action} size=${rawSize} reason=${reason || 'none'} requestId=${requestId || 'none'}`);
+    console.log(`[TRADE] ${action} reason=${reason || 'none'} requestId=${executionRequestId}`);
 
     // Live trading — verify credentials exist
 
     if (!DELTA_API_KEY || !DELTA_API_SECRET) {
       console.error('[REAL TRADE] Missing DELTA_API_KEY or DELTA_API_SECRET in env');
       return NextResponse.json({ error: 'Delta API credentials not configured' }, { status: 500 });
+    }
+
+    // This guard is deliberately server-side and fail-closed. The client may
+    // display P&L, but only the authenticated Delta account may authorize a
+    // new entry after checking the current-day realized result.
+    let entryProtection: EntryProtection | null = null;
+    let serverSize = DEFAULT_TRADE_SIZE;
+    if (action !== 'CLOSE_POSITION') {
+      const serverDecision = await validateServerEntry(action === 'BUY' ? 'BUY' : 'SELL');
+      if (!serverDecision.allowed) {
+        return NextResponse.json({ error: serverDecision.error }, { status: serverDecision.status });
+      }
+      serverSize = serverDecision.size;
+      entryProtection = serverDecision.protection;
+
+      const dailyRisk = await getCurrentDayRisk(DELTA_API_KEY, DELTA_API_SECRET);
+      if (!dailyRisk.available) {
+        return NextResponse.json(
+          { error: dailyRisk.reason || 'Daily-loss guard unavailable; new entries are paused', dailyRisk },
+          { status: 503 },
+        );
+      }
+      if (dailyRisk.lossLimitReached) {
+        return NextResponse.json(
+          { error: 'Daily-loss limit reached; new entries are locked until the next trading day', dailyRisk },
+          { status: 403 },
+        );
+      }
     }
 
     const positionsResult = await getDeltaPositions(DELTA_API_KEY, DELTA_API_SECRET, BTCUSDT_PRODUCT_ID);
@@ -124,6 +220,12 @@ export async function POST(request: Request) {
 
       console.log(`[REAL TRADE] Closing ${activePosition.side} position with reduce-only ${closeSide.toUpperCase()} ${closeSize}`);
 
+      const reservation = await reserveTradeRequest(executionRequestId, action);
+      if (reservation.state === 'replay') return NextResponse.json(reservation.response, { status: reservation.statusCode });
+      if (reservation.state === 'pending') return NextResponse.json({ error: 'This trade request is already executing.' }, { status: 409 });
+      if (reservation.state === 'unavailable') return NextResponse.json({ error: 'Durable idempotency is unavailable; execution is paused.' }, { status: 503 });
+      reservedRequestId = executionRequestId;
+
       const result = await placeDeltaOrder(
         DELTA_API_KEY,
         DELTA_API_SECRET,
@@ -132,7 +234,7 @@ export async function POST(request: Request) {
         closeSide,
         'market',
         undefined,
-        { reduceOnly: true }
+        { reduceOnly: true, clientOrderId }
       );
 
       if (result.success) {
@@ -150,7 +252,7 @@ export async function POST(request: Request) {
           rawResult: result.result,
         });
 
-        return cacheAndRespond(requestId, {
+        return finalizeTradeResponse({
           ...result,
           closed: true,
           position: activePosition,
@@ -170,7 +272,7 @@ export async function POST(request: Request) {
         closedPosition: activePosition,
       });
 
-      return cacheAndRespond(requestId, result, 400);
+      return finalizeTradeResponse(result as unknown as Record<string, unknown>, 400);
     }
 
     if (activePosition) {
@@ -183,8 +285,9 @@ export async function POST(request: Request) {
       );
     }
 
-    // Server-side size validation
-    const size = Math.min(Math.max(1, Math.floor(Number(rawSize) || 1)), MAX_TRADE_SIZE);
+    // Entry size is calculated from durable server signal/risk state; clients
+    // cannot choose a larger manual size through this endpoint.
+    const size = serverSize;
     const side = action === 'BUY' ? 'buy' : 'sell';
 
     console.log(`[REAL TRADE] Preparing order to Delta: ${side.toUpperCase()} ${size} contracts`);
@@ -202,7 +305,10 @@ export async function POST(request: Request) {
     let limitPrice: string | undefined;
     try {
       const baseUrl = process.env.DELTA_BASE_URL || 'https://api.india.delta.exchange';
-      const tickerRes = await fetch(`${baseUrl}/v2/tickers/BTCUSD`);
+      const tickerRes = await resilientFetch(`${baseUrl}/v2/tickers/BTCUSD`, {
+        retries: 1,
+        timeoutMs: 8000,
+      });
       const tickerData = await tickerRes.json();
       if (tickerData.success) {
         // Maker strategy: offset price to get maker fill (0.02% fee instead of 0.05%)
@@ -231,6 +337,11 @@ export async function POST(request: Request) {
 
     // 3. Execute Limit Order (maker strategy)
     console.log(`[REAL TRADE] Sending MAKER LIMIT order to Delta: ${side.toUpperCase()} ${size} contracts at ${limitPrice}`);
+    const reservation = await reserveTradeRequest(executionRequestId, action);
+    if (reservation.state === 'replay') return NextResponse.json(reservation.response, { status: reservation.statusCode });
+    if (reservation.state === 'pending') return NextResponse.json({ error: 'This trade request is already executing.' }, { status: 409 });
+    if (reservation.state === 'unavailable') return NextResponse.json({ error: 'Durable idempotency is unavailable; execution is paused.' }, { status: 503 });
+    reservedRequestId = executionRequestId;
     const result = await placeDeltaOrder(
       DELTA_API_KEY,
       DELTA_API_SECRET,
@@ -238,7 +349,15 @@ export async function POST(request: Request) {
       size,
       side,
       'limit',
-      limitPrice
+      limitPrice,
+      {
+        clientOrderId,
+        bracket: entryProtection ? {
+          stopLossPrice: entryProtection.stopLossPrice,
+          takeProfitPrice: entryProtection.takeProfitPrice,
+          triggerMethod: 'mark_price',
+        } : undefined,
+      }
     );
 
     // Calculate fee estimates for cost tracking
@@ -246,6 +365,7 @@ export async function POST(request: Request) {
     const breakEvenData = calculateBreakEven(size, entryPrice, DEFAULT_RISK_CONFIG, true);
 
     if (result.success) {
+      await recordEntryAccepted(executionLease);
       const orderId = result.result?.id;
       console.log('[REAL TRADE] Order placed:', orderId);
 
@@ -296,7 +416,7 @@ export async function POST(request: Request) {
             breakEvenMovePct: breakEvenData.breakEvenMovePct,
           });
 
-          return cacheAndRespond(requestId, {
+          return finalizeTradeResponse({
             success: false,
             error: 'Order not filled within timeout, cancelled',
             orderId,
@@ -322,9 +442,10 @@ export async function POST(request: Request) {
         notionalUsd: breakEvenData.notionalUsd,
         limitPrice: entryPrice,
         feeType: 'maker',
+        protection: entryProtection,
       });
 
-      return cacheAndRespond(requestId, result, 200);
+      return finalizeTradeResponse(result as unknown as Record<string, unknown>, 200);
     } else {
       console.error('[REAL TRADE] Failed:', result.error);
 
@@ -342,11 +463,27 @@ export async function POST(request: Request) {
         breakEvenMovePct: breakEvenData.breakEvenMovePct,
       });
 
-      return cacheAndRespond(requestId, result, 400);
+      return finalizeTradeResponse(result as unknown as Record<string, unknown>, 400);
     }
 
   } catch (error: unknown) {
     console.error('Trade execution error:', error);
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
+    const response = { error: getErrorMessage(error) };
+    if (reservedRequestId) {
+      try {
+        await completeTradeRequest(reservedRequestId, response, 500);
+      } catch (completionError) {
+        console.error('[TRADE] Failed to persist failed request:', completionError);
+      }
+    }
+    return NextResponse.json(response, { status: 500 });
+  } finally {
+    if (executionLease) {
+      try {
+        await releaseExecutionLease(executionLease);
+      } catch (error) {
+        console.error('[TRADE] Failed to release durable execution lease:', error);
+      }
+    }
   }
 }
