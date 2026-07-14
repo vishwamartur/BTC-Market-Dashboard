@@ -33,6 +33,8 @@ export interface BotState {
   hedgeStrikePrice: number;
   /** ATR at the time of hedge entry (used for delta-bleed exit) */
   hedgeEntryAtr: number;
+  /** Which options strategy was used (e.g. IRON_CONDOR, SKEWED_IRON_CONDOR, CREDIT_SPREAD) */
+  hedgeMode: string;
 
   // --- Per-tick market snapshot (refreshed each tick) ---
   currentPrice: number;
@@ -63,6 +65,7 @@ export function createInitialState(): BotState {
     hedgeExpiryTime: 0,
     hedgeStrikePrice: 0,
     hedgeEntryAtr: 0,
+    hedgeMode: '',
 
     currentPrice: 0,
     availableBalance: 0,
@@ -94,6 +97,7 @@ export function resetHedgeState(state: BotState): void {
   state.hedgeExpiryTime = 0;
   state.hedgeStrikePrice = 0;
   state.hedgeEntryAtr = 0;
+  state.hedgeMode = '';
   logger.info(prev, 'Reset hedge profit-tracking state');
 }
 
@@ -104,6 +108,7 @@ export function recordHedgeEntry(
   expiryTime: number,
   strikePrice: number = 0,
   entryAtr: number = 0,
+  hedgeMode: string = '',
 ): void {
   state.isHedged = true;
   state.hedgePeakProfit = 0;
@@ -112,11 +117,13 @@ export function recordHedgeEntry(
   state.hedgeExpiryTime = expiryTime;
   state.hedgeStrikePrice = strikePrice;
   state.hedgeEntryAtr = entryAtr;
+  state.hedgeMode = hedgeMode;
   logger.info({
     hedgeEntryNotional: entryNotional.toFixed(2),
     hedgeExpiryTime: new Date(expiryTime).toISOString(),
     hedgeStrikePrice: strikePrice > 0 ? strikePrice.toFixed(2) : 'N/A',
     hedgeEntryAtr: entryAtr > 0 ? entryAtr.toFixed(2) : 'N/A',
+    hedgeMode,
   }, 'Recorded hedge entry metadata');
 }
 

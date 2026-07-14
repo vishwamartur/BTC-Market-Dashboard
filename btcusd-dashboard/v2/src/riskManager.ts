@@ -9,7 +9,7 @@
  */
 
 // Re-export from centralized types for backward compatibility
-import type { TradeAction } from './types.js';
+import type { TradeAction, RiskDecision } from './types.js';
 export type { TradeAction, RiskDecision } from './types.js';
 
 export interface RiskConfig {
@@ -204,20 +204,30 @@ export function shouldTrade(
   signal: { overallSignal: string; confidence: number; score: number; trendDrift?: number; confluenceCount?: number },
   config: RiskConfig = DEFAULT_RISK_CONFIG,
   currentPrice: number = 0
-): { action: TradeAction; size: number; breakEven?: BreakEvenResult } {
-  // If confidence is below minimum threshold, consider hedging options
+): RiskDecision {
+  // If confidence is below minimum threshold, execute adaptive hedge
   if (signal.confidence < config.minConfidence) {
-    // If it's very low confidence or choppy market (e.g. 40 to 60), we hedge.
-    // For now, any time it's under minConfidence but above say 30, we'll try a hedge.
-    if (signal.confidence > 30) {
-      // Drift-enhanced hedge: if trend drift is strongly negative, return a
-      // multiplier of 1.5 so the hedge strategy sizes up the straddle.
-      // Consumers should treat `size` as a multiplier (>= 1).
-      const isDriftDown =
-        signal.trendDrift !== undefined && signal.trendDrift < -0.2;
-      return { action: 'HEDGE', size: isDriftDown ? 1.5 : 1 };
+    // Score-aware hedge mode selection:
+    //   |score| < 0.10  → Iron Condor (symmetric, truly neutral)
+    //   |score| 0.10-0.30 → Skewed Iron Condor (lean into directional bias)
+    //   |score| >= 0.30 → Credit Spread (one-sided, clear directional lean)
+    const absScore = Math.abs(signal.score);
+    const scoreBias: -1 | 0 | 1 = signal.score <= -0.10 ? -1 : signal.score >= 0.10 ? 1 : 0;
+
+    let hedgeMode: import('./types.js').HedgeMode;
+    if (absScore >= 0.30) {
+      hedgeMode = 'CREDIT_SPREAD';
+    } else if (absScore >= 0.10) {
+      hedgeMode = 'SKEWED_IRON_CONDOR';
+    } else {
+      hedgeMode = 'IRON_CONDOR';
     }
-    return { action: null, size: 0 };
+
+    // Drift-enhanced hedge: if trend drift is strongly negative, return a
+    // multiplier of 1.5 so the hedge strategy sizes up the position.
+    const isDriftDown =
+      signal.trendDrift !== undefined && signal.trendDrift < -0.2;
+    return { action: 'HEDGE', size: isDriftDown ? 1.5 : 1, hedgeMode, scoreBias };
   }
 
   // Confluence gate: signals from the new engine must have enough strong components.

@@ -122,10 +122,17 @@ export interface SignalData {
 
 export type TradeAction = 'BUY' | 'SELL' | 'HEDGE' | null;
 
+/** Which hedge structure to use when action = 'HEDGE' */
+export type HedgeMode = 'IRON_CONDOR' | 'SKEWED_IRON_CONDOR' | 'CREDIT_SPREAD';
+
 export interface RiskDecision {
   action: TradeAction;
   size: number;
   breakEven?: BreakEvenResult;
+  /** Which hedge structure to execute (only set when action = 'HEDGE') */
+  hedgeMode?: HedgeMode;
+  /** Directional bias from signal score: -1 = bearish, 0 = neutral, 1 = bullish */
+  scoreBias?: -1 | 0 | 1;
 }
 
 export interface BreakEvenResult {

@@ -2,8 +2,8 @@
  * Options Manager — pure operations for BTC options on Delta Exchange.
  *
  * This module provides functions for:
- *  - Finding ATM options for straddle construction
- *  - Executing short straddle entries
+ *  - Finding ATM options for strangle construction
+ *  - Executing short strangle entries
  *  - Closing all open option positions
  *  - Evaluating hedge profit-taking conditions
  *
@@ -36,7 +36,7 @@ const HEDGE_PROFIT_CONFIG = {
 /**
  * Delta-bleed exit configuration.
  *
- * The short straddle is delta-neutral at entry but becomes increasingly
+ * The short strangle is delta-neutral at entry but becomes increasingly
  * directional as spot moves away from the strike. If BTCUSD drifts more
  * than `ATR_MULTIPLIER` × ATR away from the strike and we haven't already
  * banked 30%+ of premium, close the hedge to prevent further bleed.
@@ -65,17 +65,74 @@ interface OptionProduct {
   state: string;
 }
 
-interface StraddleResult {
+export interface HedgeResult {
   success: boolean;
   dryRun?: boolean;
   callRes?: any;
   putRes?: any;
+  /** Long call wing (iron condor buy leg) */
+  callWingRes?: any;
+  /** Long put wing (iron condor buy leg) */
+  putWingRes?: any;
   callProduct?: OptionProduct;
   putProduct?: OptionProduct;
-  /** Estimated premium collected (for state tracking) */
+  callWingProduct?: OptionProduct;
+  putWingProduct?: OptionProduct;
+  /** Estimated net premium collected (for state tracking) */
   entryNotional?: number;
   /** Expiry timestamp (for state tracking) */
   expiryTime?: number;
+  /** Which hedge structure was used */
+  hedgeMode?: string;
+}
+
+// ---------------------------------------------------------------------------
+// ATM Strangle Finder
+// ---------------------------------------------------------------------------
+
+export async function findOutTheMoneyStrangle(config: Config, currentPrice: number) {
+  const productsRes = await getProducts(config.DELTA_API_KEY, config.DELTA_API_SECRET);
+  if (!productsRes.success || !Array.isArray(productsRes.result)) {
+    throw new Error('Failed to fetch Delta products for options hedging');
+  }
+
+  const allProducts = productsRes.result as any[];
+  const btcOptions = allProducts.filter(p => 
+    (p.contract_type === 'call_options' || p.contract_type === 'put_options') &&
+    p.underlying_asset?.symbol === 'BTC' &&
+    p.state === 'live'
+  ) as OptionProduct[];
+
+  if (btcOptions.length === 0) {
+    throw new Error('No live BTC options found');
+  }
+
+  // Group by expiration (settlement_time)
+  const expiries = [...new Set(btcOptions.map(o => o.settlement_time))].sort();
+  // Get the closest expiration (Daily)
+  const closestExpiry = expiries[0];
+  
+  const optionsForExpiry = btcOptions.filter(o => o.settlement_time === closestExpiry);
+  
+  const strikes = [...new Set(optionsForExpiry.map(o => Number(o.strike_price)))].sort((a, b) => a - b);
+  
+  // Call should be above current price (OTM)
+  let callStrike = strikes.find(strike => strike > currentPrice);
+  // Put should be below current price (OTM)
+  let putStrike = [...strikes].reverse().find(strike => strike < currentPrice);
+  
+  // Fallback to highest/lowest if price is outside the available strikes
+  if (!callStrike) callStrike = strikes[strikes.length - 1];
+  if (!putStrike) putStrike = strikes[0];
+
+  const otmCall = optionsForExpiry.find(o => o.contract_type === 'call_options' && Number(o.strike_price) === callStrike);
+  const otmPut = optionsForExpiry.find(o => o.contract_type === 'put_options' && Number(o.strike_price) === putStrike);
+
+  if (!otmCall || !otmPut) {
+    throw new Error(`Failed to find Call (strike ${callStrike}) and Put (strike ${putStrike})`);
+  }
+
+  return { call: otmCall, put: otmPut };
 }
 
 // ---------------------------------------------------------------------------
@@ -166,24 +223,24 @@ function calculateDynamicSize(dailyPnl: number, callTicker: any, putTicker: any)
 }
 
 // ---------------------------------------------------------------------------
-// Execute Short Straddle
+// Execute Short Strangle
 // ---------------------------------------------------------------------------
 
-export async function executeShortStraddle(
+export async function executeShortStrangle(
   config: Config,
   currentPrice: number,
   dailyPnl: number = 0,
   overrideSize?: number,
-): Promise<StraddleResult> {
-  logger.info({ price: currentPrice }, 'Setting up Delta-Neutral Short Straddle');
+): Promise<HedgeResult> {
+  logger.info({ price: currentPrice }, 'Setting up Delta-Neutral Short Strangle');
   
-  const straddle = await findAtTheMoneyStraddle(config, currentPrice);
-  logger.info({ call: straddle.call.symbol, put: straddle.put.symbol, strike: straddle.call.strike_price }, 'Found ATM options');
+  const strangle = await findOutTheMoneyStrangle(config, currentPrice);
+  logger.info({ call: strangle.call.symbol, put: strangle.put.symbol, callStrike: strangle.call.strike_price, putStrike: strangle.put.strike_price }, 'Found OTM options');
 
   // Fetch Greeks
   const [callTickerRes, putTickerRes] = await Promise.all([
-    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, straddle.call.symbol),
-    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, straddle.put.symbol)
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, strangle.call.symbol),
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, strangle.put.symbol)
   ]);
 
   const callTicker = callTickerRes.success && Array.isArray(callTickerRes.result) ? callTickerRes.result[0] : null;
@@ -198,48 +255,355 @@ export async function executeShortStraddle(
   const callMark = Number(callTicker?.mark_price || 0);
   const putMark = Number(putTicker?.mark_price || 0);
   const estimatedPremium = (callMark + putMark) * dynamicSize;
-  const expiryTime = new Date(straddle.call.settlement_time).getTime();
+  const expiryTime = new Date(strangle.call.settlement_time).getTime();
 
   if (config.DRY_RUN) {
-    logger.info({ action: 'SELL', size: dynamicSize, estimatedPremium: estimatedPremium.toFixed(2) }, '[DRY RUN] Would SELL ATM Call and SELL ATM Put to collect premium.');
-    return { success: true, dryRun: true, entryNotional: estimatedPremium, expiryTime, callProduct: straddle.call, putProduct: straddle.put };
+    logger.info({ action: 'SELL', size: dynamicSize, estimatedPremium: estimatedPremium.toFixed(2) }, '[DRY RUN] Would SELL OTM Call and SELL OTM Put to collect premium.');
+    return { success: true, dryRun: true, entryNotional: estimatedPremium, expiryTime, callProduct: strangle.call, putProduct: strangle.put };
   }
 
   // Sell Call via LIMIT order
   const callRes = await placeLimitOrderWithRetry(
     config.DELTA_API_KEY,
     config.DELTA_API_SECRET,
-    straddle.call.id,
+    strangle.call.id,
     dynamicSize,
     'sell',
-    straddle.call.symbol,
+    strangle.call.symbol,
   );
 
   // Sell Put via LIMIT order
   const putRes = await placeLimitOrderWithRetry(
     config.DELTA_API_KEY,
     config.DELTA_API_SECRET,
-    straddle.put.id,
+    strangle.put.id,
     dynamicSize,
     'sell',
-    straddle.put.symbol,
+    strangle.put.symbol,
   );
 
   if (!callRes.success || !putRes.success) {
-    logger.error({ callRes, putRes }, 'Failed to execute Short Straddle');
+    logger.error({ callRes, putRes }, 'Failed to execute Short Strangle');
     return { success: false, callRes, putRes };
   }
 
-  logger.info('Successfully opened Delta-Neutral Short Straddle');
+  logger.info('Successfully opened Delta-Neutral Short Strangle');
   return {
     success: true,
     callRes,
     putRes,
-    callProduct: straddle.call,
-    putProduct: straddle.put,
+    callProduct: strangle.call,
+    putProduct: strangle.put,
     entryNotional: estimatedPremium,
     expiryTime,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Iron Condor Leg Finder
+// ---------------------------------------------------------------------------
+
+/**
+ * Find 4 legs for an iron condor (or skewed iron condor).
+ *
+ * Structure:
+ *   - Sell OTM Call (inner) + Buy further OTM Call (wing)
+ *   - Sell OTM Put (inner) + Buy further OTM Put (wing)
+ *
+ * Skew (scoreBias):
+ *   - 0 = symmetric: both sides 1 strike OTM
+ *   - 1 = bullish: put side tight (1 strike OTM), call side wide (2 strikes OTM)
+ *   - -1 = bearish: call side tight (1 strike OTM), put side wide (2 strikes OTM)
+ */
+export async function findIronCondorLegs(
+  config: Config,
+  currentPrice: number,
+  scoreBias: -1 | 0 | 1 = 0,
+) {
+  const productsRes = await getProducts(config.DELTA_API_KEY, config.DELTA_API_SECRET);
+  if (!productsRes.success || !Array.isArray(productsRes.result)) {
+    throw new Error('Failed to fetch Delta products for iron condor');
+  }
+
+  const allProducts = productsRes.result as any[];
+  const btcOptions = allProducts.filter(p =>
+    (p.contract_type === 'call_options' || p.contract_type === 'put_options') &&
+    p.underlying_asset?.symbol === 'BTC' &&
+    p.state === 'live'
+  ) as OptionProduct[];
+
+  if (btcOptions.length === 0) {
+    throw new Error('No live BTC options found');
+  }
+
+  const expiries = [...new Set(btcOptions.map(o => o.settlement_time))].sort();
+  const closestExpiry = expiries[0];
+  const optionsForExpiry = btcOptions.filter(o => o.settlement_time === closestExpiry);
+  const strikes = [...new Set(optionsForExpiry.map(o => Number(o.strike_price)))].sort((a, b) => a - b);
+
+  // Find strikes above and below current price
+  const strikesAbove = strikes.filter(s => s > currentPrice);
+  const strikesBelow = strikes.filter(s => s < currentPrice).reverse(); // descending
+
+  if (strikesAbove.length < 2 || strikesBelow.length < 2) {
+    throw new Error('Not enough strikes available for iron condor');
+  }
+
+  // Skew determines how far OTM each side is:
+  //   Bullish (+1): call side 2 strikes away (more room), put side 1 strike (tight)
+  //   Bearish (-1): put side 2 strikes away (more room), call side 1 strike (tight)
+  //   Neutral (0):  both sides 1 strike away
+  const callInnerIdx = scoreBias === 1 ? 1 : 0;   // bullish → wider call side
+  const putInnerIdx  = scoreBias === -1 ? 1 : 0;   // bearish → wider put side
+
+  const sellCallStrike = strikesAbove[callInnerIdx];
+  const buyCallStrike  = strikesAbove[Math.min(callInnerIdx + 1, strikesAbove.length - 1)];
+  const sellPutStrike  = strikesBelow[putInnerIdx];
+  const buyPutStrike   = strikesBelow[Math.min(putInnerIdx + 1, strikesBelow.length - 1)];
+
+  const sellCall = optionsForExpiry.find(o => o.contract_type === 'call_options' && Number(o.strike_price) === sellCallStrike);
+  const buyCall  = optionsForExpiry.find(o => o.contract_type === 'call_options' && Number(o.strike_price) === buyCallStrike);
+  const sellPut  = optionsForExpiry.find(o => o.contract_type === 'put_options' && Number(o.strike_price) === sellPutStrike);
+  const buyPut   = optionsForExpiry.find(o => o.contract_type === 'put_options' && Number(o.strike_price) === buyPutStrike);
+
+  if (!sellCall || !buyCall || !sellPut || !buyPut) {
+    throw new Error(`Failed to find all 4 iron condor legs (sell call ${sellCallStrike}, buy call ${buyCallStrike}, sell put ${sellPutStrike}, buy put ${buyPutStrike})`);
+  }
+
+  return { sellCall, buyCall, sellPut, buyPut };
+}
+
+// ---------------------------------------------------------------------------
+// Execute Iron Condor
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute an iron condor (or skewed iron condor).
+ * Places 4 orders: 2 sells (inner legs) + 2 buys (protective wings).
+ *
+ * scoreBias:
+ *   0 = symmetric iron condor
+ *   1 = bullish skew (wider call spread, tighter put spread)
+ *  -1 = bearish skew (wider put spread, tighter call spread)
+ */
+export async function executeIronCondor(
+  config: Config,
+  currentPrice: number,
+  scoreBias: -1 | 0 | 1 = 0,
+  dailyPnl: number = 0,
+  overrideSize?: number,
+): Promise<HedgeResult> {
+  const modeName = scoreBias === 0 ? 'Iron Condor' : `Skewed Iron Condor (${scoreBias === 1 ? 'bullish' : 'bearish'})`;
+  logger.info({ price: currentPrice, scoreBias, mode: modeName }, `Setting up ${modeName}`);
+
+  const legs = await findIronCondorLegs(config, currentPrice, scoreBias);
+  logger.info({
+    sellCall: legs.sellCall.strike_price,
+    buyCall: legs.buyCall.strike_price,
+    sellPut: legs.sellPut.strike_price,
+    buyPut: legs.buyPut.strike_price,
+  }, 'Found iron condor legs');
+
+  // Fetch tickers for the sell legs to calculate Greeks-based sizing
+  const [callTickerRes, putTickerRes] = await Promise.all([
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.sellCall.symbol),
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.sellPut.symbol),
+  ]);
+  const callTicker = callTickerRes.success && Array.isArray(callTickerRes.result) ? callTickerRes.result[0] : null;
+  const putTicker = putTickerRes.success && Array.isArray(putTickerRes.result) ? putTickerRes.result[0] : null;
+
+  // Fetch wing prices for net premium calculation
+  const [callWingTickerRes, putWingTickerRes] = await Promise.all([
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.buyCall.symbol),
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.buyPut.symbol),
+  ]);
+  const callWingTicker = callWingTickerRes.success && Array.isArray(callWingTickerRes.result) ? callWingTickerRes.result[0] : null;
+  const putWingTicker = putWingTickerRes.success && Array.isArray(putWingTickerRes.result) ? putWingTickerRes.result[0] : null;
+
+  const greekSize = calculateDynamicSize(dailyPnl, callTicker, putTicker);
+  const dynamicSize = overrideSize ? Math.min(overrideSize, greekSize * 3) : greekSize;
+
+  // Net premium = (sell call + sell put) - (buy call + buy put)
+  const sellCallMark = Number(callTicker?.mark_price || 0);
+  const sellPutMark = Number(putTicker?.mark_price || 0);
+  const buyCallMark = Number(callWingTicker?.mark_price || 0);
+  const buyPutMark = Number(putWingTicker?.mark_price || 0);
+  const netPremium = ((sellCallMark + sellPutMark) - (buyCallMark + buyPutMark)) * dynamicSize;
+  const expiryTime = new Date(legs.sellCall.settlement_time).getTime();
+
+  logger.info({
+    dynamicSize,
+    sellCallMark, sellPutMark, buyCallMark, buyPutMark,
+    netPremium: netPremium.toFixed(2),
+  }, 'Iron condor pricing');
+
+  if (config.DRY_RUN) {
+    logger.info({ action: modeName, size: dynamicSize, netPremium: netPremium.toFixed(2) }, `[DRY RUN] Would execute ${modeName}`);
+    return {
+      success: true, dryRun: true,
+      entryNotional: netPremium, expiryTime,
+      callProduct: legs.sellCall, putProduct: legs.sellPut,
+      callWingProduct: legs.buyCall, putWingProduct: legs.buyPut,
+      hedgeMode: modeName,
+    };
+  }
+
+  // Place all 4 orders: sell inner legs, buy outer wings
+  const [sellCallRes, sellPutRes, buyCallRes, buyPutRes] = await Promise.all([
+    placeLimitOrderWithRetry(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.sellCall.id, dynamicSize, 'sell', legs.sellCall.symbol),
+    placeLimitOrderWithRetry(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.sellPut.id, dynamicSize, 'sell', legs.sellPut.symbol),
+    placeLimitOrderWithRetry(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.buyCall.id, dynamicSize, 'buy', legs.buyCall.symbol),
+    placeLimitOrderWithRetry(config.DELTA_API_KEY, config.DELTA_API_SECRET, legs.buyPut.id, dynamicSize, 'buy', legs.buyPut.symbol),
+  ]);
+
+  const allSuccess = sellCallRes.success && sellPutRes.success && buyCallRes.success && buyPutRes.success;
+  if (!allSuccess) {
+    logger.error({ sellCallRes, sellPutRes, buyCallRes, buyPutRes }, `Failed to execute ${modeName}`);
+    return { success: false, callRes: sellCallRes, putRes: sellPutRes, callWingRes: buyCallRes, putWingRes: buyPutRes };
+  }
+
+  logger.info(`Successfully opened ${modeName}`);
+  return {
+    success: true,
+    callRes: sellCallRes, putRes: sellPutRes,
+    callWingRes: buyCallRes, putWingRes: buyPutRes,
+    callProduct: legs.sellCall, putProduct: legs.sellPut,
+    callWingProduct: legs.buyCall, putWingProduct: legs.buyPut,
+    entryNotional: netPremium, expiryTime,
+    hedgeMode: modeName,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Execute Credit Spread
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute a one-sided credit spread for clear directional bias.
+ *
+ * scoreBias:
+ *   -1 = bearish → Bear Call Spread (sell OTM call, buy further OTM call)
+ *    1 = bullish → Bull Put Spread (sell OTM put, buy further OTM put)
+ *
+ * Profits if market moves in the expected direction OR stays flat.
+ * Max loss is capped by the bought wing.
+ */
+export async function executeCreditSpread(
+  config: Config,
+  currentPrice: number,
+  scoreBias: -1 | 1,
+  dailyPnl: number = 0,
+  overrideSize?: number,
+): Promise<HedgeResult> {
+  const direction = scoreBias === 1 ? 'bullish' : 'bearish';
+  logger.info({ price: currentPrice, direction }, `Setting up Credit Spread (${direction})`);
+
+  const productsRes = await getProducts(config.DELTA_API_KEY, config.DELTA_API_SECRET);
+  if (!productsRes.success || !Array.isArray(productsRes.result)) {
+    throw new Error('Failed to fetch Delta products for credit spread');
+  }
+
+  const allProducts = productsRes.result as any[];
+  const btcOptions = allProducts.filter(p =>
+    (p.contract_type === 'call_options' || p.contract_type === 'put_options') &&
+    p.underlying_asset?.symbol === 'BTC' &&
+    p.state === 'live'
+  ) as OptionProduct[];
+
+  const expiries = [...new Set(btcOptions.map(o => o.settlement_time))].sort();
+  const closestExpiry = expiries[0];
+  const optionsForExpiry = btcOptions.filter(o => o.settlement_time === closestExpiry);
+  const strikes = [...new Set(optionsForExpiry.map(o => Number(o.strike_price)))].sort((a, b) => a - b);
+
+  let sellLeg: OptionProduct | undefined;
+  let buyLeg: OptionProduct | undefined;
+
+  if (scoreBias === -1) {
+    // Bear Call Spread: sell nearest OTM call, buy next OTM call
+    const strikesAbove = strikes.filter(s => s > currentPrice);
+    if (strikesAbove.length < 2) throw new Error('Not enough call strikes for bear call spread');
+    sellLeg = optionsForExpiry.find(o => o.contract_type === 'call_options' && Number(o.strike_price) === strikesAbove[0]);
+    buyLeg  = optionsForExpiry.find(o => o.contract_type === 'call_options' && Number(o.strike_price) === strikesAbove[1]);
+  } else {
+    // Bull Put Spread: sell nearest OTM put, buy next OTM put
+    const strikesBelow = strikes.filter(s => s < currentPrice).reverse();
+    if (strikesBelow.length < 2) throw new Error('Not enough put strikes for bull put spread');
+    sellLeg = optionsForExpiry.find(o => o.contract_type === 'put_options' && Number(o.strike_price) === strikesBelow[0]);
+    buyLeg  = optionsForExpiry.find(o => o.contract_type === 'put_options' && Number(o.strike_price) === strikesBelow[1]);
+  }
+
+  if (!sellLeg || !buyLeg) {
+    throw new Error(`Failed to find credit spread legs for ${direction} bias`);
+  }
+
+  logger.info({ sellStrike: sellLeg.strike_price, buyStrike: buyLeg.strike_price, type: scoreBias === -1 ? 'Bear Call' : 'Bull Put' }, 'Found credit spread legs');
+
+  // Fetch tickers for pricing
+  const [sellTickerRes, buyTickerRes] = await Promise.all([
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, sellLeg.symbol),
+    getTickers(config.DELTA_API_KEY, config.DELTA_API_SECRET, buyLeg.symbol),
+  ]);
+  const sellTicker = sellTickerRes.success && Array.isArray(sellTickerRes.result) ? sellTickerRes.result[0] : null;
+  const buyTicker = buyTickerRes.success && Array.isArray(buyTickerRes.result) ? buyTickerRes.result[0] : null;
+
+  const greekSize = calculateDynamicSize(dailyPnl, sellTicker, null);
+  const dynamicSize = overrideSize ? Math.min(overrideSize, greekSize * 3) : greekSize;
+
+  const sellMark = Number(sellTicker?.mark_price || 0);
+  const buyMark = Number(buyTicker?.mark_price || 0);
+  const netPremium = (sellMark - buyMark) * dynamicSize;
+  const expiryTime = new Date(sellLeg.settlement_time).getTime();
+
+  const spreadName = scoreBias === -1 ? 'Bear Call Spread' : 'Bull Put Spread';
+
+  logger.info({ dynamicSize, sellMark, buyMark, netPremium: netPremium.toFixed(2) }, `${spreadName} pricing`);
+
+  if (config.DRY_RUN) {
+    logger.info({ action: spreadName, size: dynamicSize, netPremium: netPremium.toFixed(2) }, `[DRY RUN] Would execute ${spreadName}`);
+    const dryResult: HedgeResult = {
+      success: true, dryRun: true,
+      entryNotional: netPremium, expiryTime,
+      hedgeMode: spreadName,
+    };
+    if (scoreBias === -1) {
+      dryResult.callProduct = sellLeg;
+      dryResult.callWingProduct = buyLeg;
+    } else {
+      dryResult.putProduct = sellLeg;
+      dryResult.putWingProduct = buyLeg;
+    }
+    return dryResult;
+  }
+
+  // Place 2 orders: sell inner, buy wing
+  const [sellRes, buyRes] = await Promise.all([
+    placeLimitOrderWithRetry(config.DELTA_API_KEY, config.DELTA_API_SECRET, sellLeg.id, dynamicSize, 'sell', sellLeg.symbol),
+    placeLimitOrderWithRetry(config.DELTA_API_KEY, config.DELTA_API_SECRET, buyLeg.id, dynamicSize, 'buy', buyLeg.symbol),
+  ]);
+
+  if (!sellRes.success || !buyRes.success) {
+    logger.error({ sellRes, buyRes }, `Failed to execute ${spreadName}`);
+    return { success: false, callRes: sellRes, putRes: buyRes };
+  }
+
+  logger.info(`Successfully opened ${spreadName}`);
+  const result: HedgeResult = {
+    success: true,
+    entryNotional: netPremium, expiryTime,
+    hedgeMode: spreadName,
+  };
+  if (scoreBias === -1) {
+    result.callRes = sellRes;
+    result.callWingRes = buyRes;
+    result.callProduct = sellLeg;
+    result.callWingProduct = buyLeg;
+  } else {
+    result.putRes = sellRes;
+    result.putWingRes = buyRes;
+    result.putProduct = sellLeg;
+    result.putWingProduct = buyLeg;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
