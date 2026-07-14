@@ -67,10 +67,10 @@ export const hedgeStrategy: Strategy = {
 
     // 2. Manage existing hedges
     if (state.isHedged) {
-      // If the market moved and the optimal hedge mode changed, automatically close the old one
-      if (state.hedgeMode && state.hedgeMode !== targetHedgeMode) {
+      // If the market moved and the optimal hedge mode changed (or we are migrating from an old untracked hedge)
+      if (state.hedgeMode !== targetHedgeMode) {
         logger.info(
-          { oldMode: state.hedgeMode, newMode: targetHedgeMode },
+          { oldMode: state.hedgeMode || 'untracked_old_hedge', newMode: targetHedgeMode },
           'Hedge mode changed due to new signal score. Closing old options positions.',
         );
         if (!config.DRY_RUN) {
@@ -146,17 +146,29 @@ export const hedgeStrategy: Strategy = {
       hedgeRes = await executeShortStrangle(config, state.currentPrice, state.dailyPnl, hedgeSize);
     }
 
-    if (hedgeRes.success && hedgeRes.entryNotional !== undefined && hedgeRes.expiryTime !== undefined) {
+    // Check if ANY leg filled (even partially) to prevent the bot from looping and stacking positions
+    const anyLegSuccess =
+      hedgeRes.callRes?.success ||
+      hedgeRes.putRes?.success ||
+      hedgeRes.callWingRes?.success ||
+      hedgeRes.putWingRes?.success ||
+      hedgeRes.success;
+
+    if (anyLegSuccess && hedgeRes.entryNotional !== undefined && hedgeRes.expiryTime !== undefined) {
       const strikePriceRaw = hedgeRes.callProduct?.strike_price;
       const strikePrice = strikePriceRaw !== undefined ? Number(strikePriceRaw) : 0;
       const entryAtr = await fetchAtr(config);
       recordHedgeEntry(state, hedgeRes.entryNotional, hedgeRes.expiryTime, strikePrice, entryAtr, targetHedgeMode);
-    } else if (hedgeRes.success) {
+    } else if (anyLegSuccess) {
       state.isHedged = true;
       state.hedgeMode = targetHedgeMode;
     }
 
     if (!hedgeRes.success) {
+      if (anyLegSuccess) {
+        logger.error({ targetHedgeMode }, 'PARTIAL FILL: Some legs of the options structure failed to execute! Bot marked as hedged to prevent looping, but you may have naked risk.');
+        return { action: 'EXECUTED', reason: `Partial fill on ${targetHedgeMode}` };
+      }
       return { action: 'ERROR', reason: `Failed to execute ${targetHedgeMode}` };
     }
 
